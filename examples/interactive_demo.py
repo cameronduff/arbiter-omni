@@ -157,6 +157,7 @@ def arbitrate_decision(
     text_context: Optional[str] = None,
     image_input: Optional[Any] = None,
     audio_input: Optional[Any] = None,
+    temperature: Optional[float] = 0.7,
 ) -> Tuple[str, Dict[str, float], str, str, str]:
     """Called by Gradio on button click and by the test suite directly."""
     engine = get_engine()
@@ -184,6 +185,7 @@ def arbitrate_decision(
         text=text_context if text_context and text_context.strip() else None,
         image=image_input,
         audio=audio_data,
+        temperature=temperature,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -266,6 +268,15 @@ Single non-autoregressive forward pass · Calibrated probabilities · Works with
                         label="🔊 Audio  (optional)",
                     )
 
+                temperature_slider = gr.Slider(
+                    minimum=0.1,
+                    maximum=2.0,
+                    value=0.7,
+                    step=0.05,
+                    label="🌡️ Temperature / Output Sharpness",
+                    info="Lower values (<1.0) produce sharper, more decisive probability distributions; higher values soften confidence.",
+                )
+
                 arbitrate_btn = gr.Button("⚡ Run Arbitration", variant="primary", size="lg")
 
             # ── Right column: outputs ─────────────────────────────────────
@@ -297,7 +308,7 @@ Single non-autoregressive forward pass · Calibrated probabilities · Works with
         # Wire button
         arbitrate_btn.click(
             fn=arbitrate_decision,
-            inputs=[question_input, candidates_input, text_context, image_input, audio_input],
+            inputs=[question_input, candidates_input, text_context, image_input, audio_input, temperature_slider],
             outputs=[winner_output, probs_output, entropy_output, noul_output, score_output],
         )
 
