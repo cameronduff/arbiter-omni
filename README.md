@@ -117,25 +117,37 @@ flowchart TD
 ## 🔬 Mathematical Formulation
 
 ### 1. Missing-Modality Masking & Token Assembly
-Let $\mathcal{M} = \{\text{text}, \text{image}, \text{video}, \text{audio}\}$ represent the input modalities. Each present modality $m \in \mathcal{M}$ produces an embedding $\mathbf{x}_m \in \mathbb{R}^{d_m}$. For visual grounding, the image encoder additionally extracts unpooled $7 \times 7 = 49$ spatial patch representations $\mathbf{X}_{\text{patch}} \in \mathbb{R}^{P \times d_{\text{image}}}$.
 
-Missing modalities are assigned arbitrary zero vectors and marked in the boolean key-padding mask $\mathbf{M} \in \{0, 1\}^{L}$:
+Let $\mathcal{M}$ represent the set of input modalities:
+
+$$\mathcal{M} = \lbrace \text{text},\ \text{image},\ \text{video},\ \text{audio} \rbrace$$
+
+Each present modality $m \in \mathcal{M}$ produces an embedding $\mathbf{x}_m \in \mathbb{R}^{d_m}$. For visual grounding, the image encoder additionally extracts $7 \times 7 = 49$ unpooled spatial patch representations:
+
+$$\mathbf{X}_{\text{patch}} \in \mathbb{R}^{P \times d_{\text{image}}}$$
+
+Missing modalities are assigned zero vectors and marked in the boolean key-padding mask $\mathbf{M} \in \lbrace 0, 1 \rbrace^{L}$. Each present modality token is projected and type-embedded:
 
 $$\mathbf{t}_m = \text{LayerNorm}(\mathbf{W}_m \mathbf{x}_m) + \mathbf{e}_{\text{type}}(m)$$
 
-$$\mathbf{p}_i = \text{LayerNorm}(\mathbf{W}_{\text{patch}} \mathbf{x}_{\text{patch}, i}) + \mathbf{e}_{\text{spatial}}(i), \quad i \in \{1, \dots, P\}$$
+Each spatial patch token receives a learned 2D positional embedding:
+
+$$\mathbf{p}_i = \text{LayerNorm}(\mathbf{W}_{\text{patch}}\ \mathbf{x}_{\text{patch},i}) + \mathbf{e}_{\text{spatial}}(i), \quad i \in \lbrace 1, \dots, P \rbrace$$
+
+The key-padding mask gates attention per token:
 
 $$\mathbf{M}_j = \begin{cases} 0 & \text{if token } j \text{ is valid and present} \\ 1 & \text{if token / modality } j \text{ is missing (masked out)} \end{cases}$$
 
-The full multimodal sequence unites global modality latents and fine-grained spatial grounding tokens:
+The full multimodal token sequence unites global modality latents with fine-grained spatial grounding tokens:
 
 $$\mathbf{T} = \left[ \mathbf{t}_{\text{query}},\, \mathbf{t}_{\text{question}},\, \mathbf{t}_{\text{text}},\, \mathbf{t}_{\text{image}},\, \mathbf{t}_{\text{video}},\, \mathbf{t}_{\text{audio}},\, \mathbf{p}_1, \dots, \mathbf{p}_P \right] \in \mathbb{R}^{(6 + P) \times d_h}$$
 
-and processed by a multi-head transformer with scaled dot-product attention:
+This sequence is processed by a multi-head transformer with masked scaled dot-product attention:
 
-$$\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q} \mathbf{K}^\top}{\sqrt{d_k}} + \mathbf{M}_{\text{attn}}\right) \mathbf{V}$$
+$$\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\!\left(\frac{\mathbf{Q} \mathbf{K}^\top}{\sqrt{d_k}} + \mathbf{M}_{\text{attn}}\right) \mathbf{V}$$
 
-When an image is absent, all $P$ spatial patch tokens are masked out ($\mathbf{M}_{\text{patch}} = 1$) alongside $\mathbf{t}_{\text{image}}$, preventing any spatial attention leakage or NaN artifacts. The updated representation at index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
+When an image is absent, all $P$ spatial patch tokens are masked out ($\mathbf{M}_{\text{patch}} = 1$) alongside $\mathbf{t}_{\text{image}}$, preventing spatial attention leakage or NaN artifacts. The representation at sequence index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
+
 
 ### 2. Dynamic Candidate Interaction
 Given $K$ runtime candidate strings $\{c_1, \dots, c_K\}$, candidate embeddings $\mathbf{e}_{c_k}$ interact with context state $\mathbf{z}_{\text{context}}$ via dual projection:
