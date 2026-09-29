@@ -56,6 +56,10 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         # Learnable [DECISION_QUERY] latent token
         self.decision_query = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
 
+        # Spatial 2D patch positional embeddings for fine-grained visual grounding
+        self.max_spatial_patches = 196
+        self.spatial_pos_embed = nn.Parameter(torch.randn(1, 196, hidden_dim) * 0.02)
+
         # Transformer encoder layers
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
@@ -76,6 +80,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         question_embed: torch.Tensor,
         modality_embeds: Dict[ModalityType, torch.Tensor],
         presence_mask: Dict[ModalityType, torch.Tensor],
+        image_patches: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Fuses modalities into a single context vector.
@@ -84,6 +89,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             question_embed: [B, D_q]
             modality_embeds: Dict of ModalityType -> [B, D_m]
             presence_mask: Dict of ModalityType -> [B] boolean (True if present)
+            image_patches: Optional [B, P, D_img] unpooled visual spatial patch tokens.
             
         Returns:
             fused_context: [B, hidden_dim]
@@ -126,6 +132,24 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             # PyTorch key_padding_mask: True indicates element should be IGNORED (masked out)
             mask_list.append((~is_present).unsqueeze(1))
 
+        # Spatial Visual Patch Tokens (Fine-Grained Visual Grounding)
+        if image_patches is not None and image_patches.numel() > 0:
+            P = min(image_patches.size(1), self.max_spatial_patches)
+            valid_patches = image_patches[:, :P, :]
+            # Project patches through image projection layers
+            patch_proj = self.projections["image"](valid_patches)  # [B, P, hidden_dim]
+            patch_pos = self.spatial_pos_embed[:, :P, :].to(device)
+            patch_type = self.modality_type_embed(torch.tensor(3, device=device))
+            patch_tokens = patch_proj + patch_pos + patch_type
+
+            token_list.append(patch_tokens)
+            img_present = presence_mask.get(
+                ModalityType.IMAGE, torch.zeros(batch_size, dtype=torch.bool, device=device)
+            )
+            # If image missing, mask out all spatial patches
+            patch_mask = (~img_present).unsqueeze(1).expand(-1, P)
+            mask_list.append(patch_mask)
+
         # Shape: [B, Seq_Len, hidden_dim]
         tokens = torch.cat(token_list, dim=1)
         # Shape: [B, Seq_Len]
@@ -137,3 +161,4 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         # Extract the decision query output token (index 0)
         fused_context = self.output_norm(transformed[:, 0, :])
         return fused_context
+

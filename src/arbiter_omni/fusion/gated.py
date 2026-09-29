@@ -66,8 +66,10 @@ class GatedMultimodalFusion(BaseMultimodalFusion):
         question_embed: torch.Tensor,
         modality_embeds: Dict[ModalityType, torch.Tensor],
         presence_mask: Dict[ModalityType, torch.Tensor],
+        image_patches: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch_size = question_embed.shape[0]
+
         device = question_embed.device
 
         # Start with projected question representation

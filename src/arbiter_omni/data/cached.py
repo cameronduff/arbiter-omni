@@ -30,6 +30,7 @@ class CachedSample:
         candidate_embeds: torch.Tensor,
         target_idx: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        image_patches: Optional[torch.Tensor] = None,
     ):
         self.question_embed = question_embed.detach().cpu()
         self.modality_embeds = {k: v.detach().cpu() for k, v in modality_embeds.items()}
@@ -37,6 +38,8 @@ class CachedSample:
         self.candidate_embeds = candidate_embeds.detach().cpu()
         self.target_idx = target_idx
         self.metadata = metadata or {}
+        self.image_patches = image_patches.detach().cpu() if image_patches is not None else None
+
 
 
 class CachedMultimodalDataset(Dataset):
@@ -95,7 +98,7 @@ class CachedMultimodalDataset(Dataset):
                 meta = batch.get("metadata", [{} for _ in range(len(questions))])
 
                 # 1. Encode questions and multimodal inputs
-                q_embeds, mod_embeds, pres_masks = model.encode_inputs(
+                q_embeds, mod_embeds, pres_masks, patch_embeds = model.encode_inputs(
                     questions=questions,
                     texts=texts,
                     images=images,
@@ -114,6 +117,7 @@ class CachedMultimodalDataset(Dataset):
                     s_q = q_embeds[i].detach().cpu()
                     s_mods = {m: mod_embeds[m][i].detach().cpu() for m in mod_embeds}
                     s_mask = {m: bool(pres_masks[m][i].item()) for m in pres_masks}
+                    s_patches = patch_embeds[i].detach().cpu() if patch_embeds is not None else None
 
                     cached_samples.append(
                         CachedSample(
@@ -123,8 +127,10 @@ class CachedMultimodalDataset(Dataset):
                             candidate_embeds=c_embed,
                             target_idx=targ,
                             metadata=meta[i] if i < len(meta) else {},
+                            image_patches=s_patches,
                         )
                     )
+
 
                 sample_offset += b_size
                 if verbose and (sample_offset % 100 == 0 or sample_offset == total):
@@ -186,6 +192,18 @@ def collate_cached_multimodal_decision(batch: List[CachedSample]) -> Dict[str, A
         else None
     )
 
+    # 5. Spatial visual patches [B, P, img_dim] if cached
+    has_patches = any(hasattr(s, "image_patches") and s.image_patches is not None for s in batch)
+    if has_patches:
+        valid_sample = next(s for s in batch if hasattr(s, "image_patches") and s.image_patches is not None)
+        P, img_dim = valid_sample.image_patches.shape[-2], valid_sample.image_patches.shape[-1]
+        batch_patches = torch.zeros((B, P, img_dim), dtype=torch.float32)
+        for i, s in enumerate(batch):
+            if hasattr(s, "image_patches") and s.image_patches is not None:
+                batch_patches[i] = s.image_patches
+    else:
+        batch_patches = None
+
     return {
         "is_cached": True,
         "question_embed": q_embeds,
@@ -194,4 +212,6 @@ def collate_cached_multimodal_decision(batch: List[CachedSample]) -> Dict[str, A
         "candidate_embeds": cnd_embeds,
         "candidate_mask": cnd_mask,
         "targets": targets,
+        "image_patches": batch_patches,
     }
+

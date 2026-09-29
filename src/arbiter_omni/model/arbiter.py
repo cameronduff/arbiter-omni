@@ -34,10 +34,13 @@ class ArbiterOmniModel(nn.Module):
         decision_head: Optional[DynamicDecisionHead] = None,
         hidden_dim: int = 256,
         scoring_dim: int = 256,
+        use_spatial_patches: bool = True,
     ):
         super().__init__()
         self.encoder = encoder
         self.encoder.freeze()  # Guarantee encoders are frozen
+        self.use_spatial_patches = use_spatial_patches
+
 
         # Setup default fusion if none supplied
         if fusion is None:
@@ -81,7 +84,7 @@ class ArbiterOmniModel(nn.Module):
         images: Optional[Sequence[Any]] = None,
         videos: Optional[Sequence[Any]] = None,
         audios: Optional[Sequence[Any]] = None,
-    ) -> Tuple[torch.Tensor, Dict[ModalityType, torch.Tensor], Dict[ModalityType, torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Dict[ModalityType, torch.Tensor], Dict[ModalityType, torch.Tensor], Optional[torch.Tensor]]:
         """
         Runs frozen encoders over inputs and builds presence masks.
         """
@@ -93,6 +96,7 @@ class ArbiterOmniModel(nn.Module):
 
         modality_embeds: Dict[ModalityType, torch.Tensor] = {}
         presence_mask: Dict[ModalityType, torch.Tensor] = {}
+        image_patches: Optional[torch.Tensor] = None
 
         # 1. Text modality
         if texts is not None:
@@ -110,6 +114,8 @@ class ArbiterOmniModel(nn.Module):
             presence_mask[ModalityType.IMAGE] = torch.tensor(img_present, dtype=torch.bool, device=device)
             valid_imgs = [img if p else None for img, p in zip(images, img_present)]
             modality_embeds[ModalityType.IMAGE] = self.encoder.encode_image(valid_imgs).to(device)
+            if self.use_spatial_patches and any(img_present):
+                image_patches = self.encoder.encode_image_patches(valid_imgs).to(device)
         else:
             presence_mask[ModalityType.IMAGE] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.IMAGE] = torch.zeros((B, self.encoder.image_dim), device=device)
@@ -134,7 +140,8 @@ class ArbiterOmniModel(nn.Module):
             presence_mask[ModalityType.AUDIO] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.AUDIO] = torch.zeros((B, self.encoder.audio_dim), device=device)
 
-        return q_embed, modality_embeds, presence_mask
+        return q_embed, modality_embeds, presence_mask, image_patches
+
 
     def encode_candidates(self, candidates_batch: Sequence[Sequence[str]]) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -183,7 +190,7 @@ class ArbiterOmniModel(nn.Module):
             entropy: [B]
             fused_context: [B, hidden_dim]
         """
-        q_embed, mod_embeds, presence_mask = self.encode_inputs(
+        q_embed, mod_embeds, presence_mask, image_patches = self.encode_inputs(
             questions=questions, texts=texts, images=images, videos=videos, audios=audios
         )
 
@@ -191,6 +198,7 @@ class ArbiterOmniModel(nn.Module):
             question_embed=q_embed,
             modality_embeds=mod_embeds,
             presence_mask=presence_mask,
+            image_patches=image_patches,
         )
 
         cnd_embeds, cnd_mask = self.encode_candidates(candidates)
@@ -210,6 +218,7 @@ class ArbiterOmniModel(nn.Module):
         presence_mask: Dict[str, torch.Tensor],
         candidate_embeds: torch.Tensor,
         candidate_mask: Optional[torch.Tensor] = None,
+        image_patches: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Executes fusion and decision scoring directly on pre-computed encoder embeddings,
@@ -219,6 +228,7 @@ class ArbiterOmniModel(nn.Module):
             question_embed=question_embed,
             modality_embeds=modality_embeds,
             presence_mask=presence_mask,
+            image_patches=image_patches,
         )
 
         logits, probs, entropy = self.decision_head(
@@ -228,3 +238,4 @@ class ArbiterOmniModel(nn.Module):
         )
 
         return logits, probs, entropy, fused_context
+

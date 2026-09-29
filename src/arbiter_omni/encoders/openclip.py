@@ -111,6 +111,40 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
         return features
 
+    def encode_image_patches(self, images: Sequence[Any]) -> torch.Tensor:
+        """
+        Extracts unpooled 2D spatial patch tokens from OpenCLIP visual transformer.
+        Returns:
+            [B, P, image_dim] tensor of normalized patch embeddings (P = 49 for ViT-B-32).
+        """
+        processed_tensors = []
+        for img in images:
+            if isinstance(img, str):
+                img = Image.open(img).convert("RGB")
+            elif isinstance(img, np.ndarray):
+                img = Image.fromarray(img).convert("RGB")
+            elif not isinstance(img, Image.Image):
+                img = Image.new("RGB", (224, 224), color=(128, 128, 128))
+            processed_tensors.append(self.preprocess(img))
+
+        batch = torch.stack(processed_tensors).to(self.device)
+        with torch.no_grad():
+            visual = getattr(self.model, "visual", None)
+            if visual is not None and hasattr(visual, "_embeds") and hasattr(visual, "transformer"):
+                x_embeds = visual._embeds(batch)
+                x_trans = visual.transformer(x_embeds)
+                _, tokens = visual._pool(x_trans)
+                if getattr(visual, "proj", None) is not None:
+                    tokens_proj = tokens @ visual.proj
+                else:
+                    tokens_proj = tokens
+                patch_tokens = tokens_proj / (tokens_proj.norm(dim=-1, keepdim=True) + 1e-8)
+            else:
+                pooled = self.encode_image(images)
+                patch_tokens = pooled.unsqueeze(1)
+        return patch_tokens
+
+
     def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
         """
         Encodes video clips by sampling frames and aggregating them using Spatio-Temporal Video Attention.
