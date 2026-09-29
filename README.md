@@ -169,11 +169,11 @@ $$H(P) = -\sum_{k=1}^K P(c_k) \ln P(c_k)$$
 ### 3. Hard-Negative Candidate Mining & Contrastive Margin Loss
 Standard cross-entropy loss with random candidate alternatives allows models to separate obvious choices easily (e.g. 'brake' vs 'accelerate'), but leads to soft, uncalibrated boundaries when candidates are semantically similar. ArbiterOmni hardens decision boundaries via semantic cosine similarity hard-negative mining and pairwise contrastive margin ranking loss:
 
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \max\left(0,\, \gamma - (s_{\text{pos}} - s_{\text{hard\_neg}})\right)$$
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \max\left(0,\, \gamma - (s_{\text{pos}} - s_{\text{hard-neg}})\right)$$
 
 where:
 - $s_{\text{pos}}$ is the compatibility logit assigned to the ground-truth candidate: $s_{\text{pos}} = s_y$.
-- $s_{\text{hard\_neg}}$ is the maximum score among competing valid negative candidates: $s_{\text{hard\_neg}} = \max_{j \neq y, \text{valid}} s_j$.
+- $s_{\text{hard-neg}}$ is the maximum score among competing valid negative candidates: $s_{\text{hard-neg}} = \max_{j \neq y,\ \text{valid}}\ s_j$.
 - $\gamma$ is the contrastive margin (default $\gamma = 0.5$) enforcing a minimum logit separation gap.
 - $\lambda$ is the contrastive loss weight (default $\lambda = 0.2$).
 

@@ -85,7 +85,7 @@
 
 ### 6. Fine-Grained Candidate Foils & Boundary Sharpness
 - **Semantic Foil Mining**: Hard negatives retrieved via text cosine similarity nearest neighbors on frozen representations ($0.35 \le \text{sim} \le 0.98$).
-- **Contrastive Margin Regularization**: $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \max(0, \gamma - (s_{\text{pos}} - s_{\text{hard\_neg}}))$ with $\gamma = 0.5$, $\lambda = 0.2$.
+- **Contrastive Margin Regularization**: $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \max(0, \gamma - (s_{\text{pos}} - s_{\text{hard-neg}}))$ with $\gamma = 0.5$, $\lambda = 0.2$.
 - **Boundary Sharpness**: Logit margin between target action and fine-grained adversarial foils increased from $+0.12$ to $+0.58$, reducing decision entropy on ambiguous choices by 38.4% and eliminating soft hesitation.
 
 ### 7. Statistical Conformal Prediction & System 2 Escalation Rates
