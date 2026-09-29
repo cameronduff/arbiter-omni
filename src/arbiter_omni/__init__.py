@@ -11,6 +11,10 @@ from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
 )
+from arbiter_omni.data.miner import (
+    DEFAULT_CANDIDATE_POOL,
+    HardNegativeMiner,
+)
 from arbiter_omni.data.synthetic import (
     create_synthetic_audio,
     create_synthetic_image,
@@ -31,10 +35,14 @@ from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.fusion.gated import GatedMultimodalFusion
 from arbiter_omni.fusion.transformer import TransformerMultimodalFusion
 from arbiter_omni.model.arbiter import ArbiterOmniModel
-from arbiter_omni.model.decision_head import DynamicDecisionHead
+from arbiter_omni.model.decision_head import (
+    DynamicDecisionHead,
+    contrastive_margin_loss,
+)
 from arbiter_omni.training.config import TrainingConfig
 from arbiter_omni.training.trainer import ArbiterOmniTrainer
 from arbiter_omni.types import DecisionResult, ModalityType, MultimodalSample
+
 
 __version__ = "0.1.0"
 
@@ -46,9 +54,11 @@ __all__ = [
     "BaseMultimodalFusion",
     "CLAPAudioEncoder",
     "CachedMultimodalDataset",
+    "DEFAULT_CANDIDATE_POOL",
     "DecisionResult",
     "DynamicDecisionHead",
     "GatedMultimodalFusion",
+    "HardNegativeMiner",
     "MockMultimodalEncoder",
     "ModalityType",
     "MultimodalDecisionDataset",
@@ -60,6 +70,8 @@ __all__ = [
     "collate_cached_multimodal_decision",
     "collate_multimodal_decision",
     "configure_cpu_threads",
+    "contrastive_margin_loss",
+
     "create_synthetic_audio",
     "create_synthetic_image",
     "generate_synthetic_dataset",

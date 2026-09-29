@@ -8,9 +8,10 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-54%2F54%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-60%2F60%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
+
 
 [Architecture](#-architecture) • [Quickstart](#-quickstart) • [Mathematical-Grounding](#-mathematical-formulation) • [Jev-Primitives](#-jev-system-1-primitives) • [Benchmarks](#-benchmarks--empirical-evaluation) • [Extensibility](#-extending-encoders--fusion)
 
@@ -147,7 +148,25 @@ Decision uncertainty is monitored directly using Shannon Entropy:
 
 $$H(P) = -\sum_{k=1}^K P(c_k) \ln P(c_k)$$
 
+### 3. Hard-Negative Candidate Mining & Contrastive Margin Loss
+Standard cross-entropy loss with random candidate alternatives allows models to separate obvious choices easily (e.g. 'brake' vs 'accelerate'), but leads to soft, uncalibrated boundaries when candidates are semantically similar. ArbiterOmni hardens decision boundaries via semantic cosine similarity hard-negative mining and pairwise contrastive margin ranking loss:
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \max\left(0,\, \gamma - (s_{\text{pos}} - s_{\text{hard\_neg}})\right)$$
+
+where:
+- $s_{\text{pos}}$ is the compatibility logit assigned to the ground-truth candidate: $s_{\text{pos}} = s_y$.
+- $s_{\text{hard\_neg}}$ is the maximum score among competing valid negative candidates: $s_{\text{hard\_neg}} = \max_{j \neq y, \text{valid}} s_j$.
+- $\gamma$ is the contrastive margin (default $\gamma = 0.5$) enforcing a minimum logit separation gap.
+- $\lambda$ is the contrastive loss weight (default $\lambda = 0.2$).
+
+Semantic foils are identified by `HardNegativeMiner` through cosine similarity on frozen text representations:
+
+$$\text{sim}(c_{\text{target}}, c_{\text{candidate}}) = \frac{\mathbf{e}_{\text{target}}^\top \mathbf{e}_{\text{candidate}}}{\|\mathbf{e}_{\text{target}}\| \|\mathbf{e}_{\text{candidate}}\|}$$
+
+Retrieving nearest neighbors within $[\text{sim}_{\min}, \text{sim}_{\max}]$ (e.g. $0.35 \le \text{sim} \le 0.98$) excludes identity matches while selecting realistic, fine-grained foils (e.g. "proceed with caution" vs "proceed at nominal velocity").
+
 ---
+
 
 ## 🚀 Quickstart
 
@@ -292,7 +311,34 @@ To run the production training pipeline with automated pre-caching:
 uv run python scripts/train_v1.py --epochs 3 --batch-size 32
 ```
 
+### 5. Semantic Foil Mining & Contrastive Margin Training
+
+To mine hard-negative candidate foils and train with margin loss:
+
+```python
+from arbiter_omni import HardNegativeMiner, ArbiterOmniTrainer, TrainingConfig
+
+# 1. Harvest candidates and mine nearest-neighbor foils
+miner = HardNegativeMiner.from_dataset(train_dataset, encoder=model.encoder)
+augmented_dataset = miner.augment_dataset(train_dataset, num_hard_negatives=1)
+
+# 2. Configure contrastive margin objective
+config = TrainingConfig(
+    contrastive_lambda=0.2,  # Weight for margin penalty
+    margin_gamma=0.5,        # Minimum logit separation (pos - hard_neg >= 0.5)
+)
+trainer = ArbiterOmniTrainer(model=model, config=config)
+trainer.fit(train_dataset=augmented_dataset)
+```
+
+CLI flag execution:
+
+```bash
+uv run python scripts/train_v1.py --mine-hard-negatives --contrastive-lambda 0.2 --margin-gamma 0.5
+```
+
 ---
+
 
 ## 🎯 Jev System 1 Primitives
 

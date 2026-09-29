@@ -22,6 +22,7 @@ from arbiter_omni import (
     ArbiterOmniModel,
     ArbiterOmniTrainer,
     CachedMultimodalDataset,
+    HardNegativeMiner,
     MockMultimodalEncoder,
     MultimodalDecisionDataset,
     OpenCLIPMultimodalEncoder,
@@ -30,6 +31,7 @@ from arbiter_omni import (
     get_device_telemetry,
     resolve_device,
 )
+
 from arbiter_omni.data.robotics import generate_robotics_samples
 from arbiter_omni.data.scienceqa import load_scienceqa_dataset, create_mock_scienceqa_samples
 from arbiter_omni.data.seedbench import load_seedbench_dataset, create_mock_seedbench_samples
@@ -97,6 +99,9 @@ def train_v1(
     use_mock_data: bool = False,
     device_name: str | None = None,
     cache_embeddings: bool = True,
+    contrastive_lambda: float = 0.2,
+    margin_gamma: float = 0.5,
+    mine_hard_negatives: bool = False,
 ) -> str:
     """Executes the v1 checkpoint training pipeline and saves weights."""
     device = resolve_device(device_name)
@@ -139,6 +144,13 @@ def train_v1(
         use_mock_data=use_mock_data,
     )
 
+    if mine_hard_negatives:
+        logger.info("🎯 Mining semantically adjacent candidate foils using text encoder cosine similarity...")
+        miner = HardNegativeMiner.from_dataset(train_dataset.samples, encoder=model.encoder)
+        augmented_train = miner.augment_dataset(train_dataset.samples, num_hard_negatives=1)
+        train_dataset = MultimodalDecisionDataset(augmented_train)
+        logger.info(f"Augmented train dataset with mined hard negatives (size: {len(train_dataset)})")
+
     if cache_embeddings:
         logger.info("⚡ Pre-caching frozen representations into memory (bypassing frozen encoders during epochs)...")
         train_dataset = CachedMultimodalDataset.from_dataset(
@@ -159,10 +171,12 @@ def train_v1(
         save_path=save_path,
         device=str(device),
         accumulate_grad_batches=1,
+        contrastive_lambda=contrastive_lambda,
+        margin_gamma=margin_gamma,
     )
 
     trainer = ArbiterOmniTrainer(model=model, config=config)
-    logger.info("Starting training loop...")
+    logger.info(f"Starting training loop (contrastive_lambda={contrastive_lambda}, margin_gamma={margin_gamma})...")
     history = trainer.fit(train_dataset=train_dataset, val_dataset=val_dataset)
 
     # Verify saved checkpoint
@@ -183,6 +197,9 @@ if __name__ == "__main__":
     parser.add_argument("--encoder-type", type=str, default="openclip", choices=["openclip", "mock"], help="Encoder type")
     parser.add_argument("--use-mock-data", action="store_true", help="Use synthetic mock data instead of streaming")
     parser.add_argument("--no-cache", action="store_true", help="Disable embedding pre-caching")
+    parser.add_argument("--contrastive-lambda", type=float, default=0.2, help="Weight lambda for contrastive margin loss")
+    parser.add_argument("--margin-gamma", type=float, default=0.5, help="Margin gamma for contrastive loss")
+    parser.add_argument("--mine-hard-negatives", action="store_true", help="Mine hard negative candidate foils")
     parser.add_argument("--device", type=str, default=None, help="Compute device override")
 
     args = parser.parse_args()
@@ -196,6 +213,10 @@ if __name__ == "__main__":
             use_mock_data=args.use_mock_data,
             device_name=args.device,
             cache_embeddings=not args.no_cache,
+            contrastive_lambda=args.contrastive_lambda,
+            margin_gamma=args.margin_gamma,
+            mine_hard_negatives=args.mine_hard_negatives,
         )
     finally:
         os._exit(0)
+
