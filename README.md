@@ -8,9 +8,10 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-60%2F60%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-65%2F65%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
+
 
 
 [Architecture](#-architecture) • [Quickstart](#-quickstart) • [Mathematical-Grounding](#-mathematical-formulation) • [Jev-Primitives](#-jev-system-1-primitives) • [Benchmarks](#-benchmarks--empirical-evaluation) • [Extensibility](#-extending-encoders--fusion)
@@ -238,11 +239,14 @@ result = engine.decide(
     text="CRITICAL: LiDAR detected static obstacle at 0.3 meters.",
 )
 
-print(f"Winner:     {result.winner}")
-print(f"Confidence: {result.confidence * 100:.2f}%")
-print(f"Entropy:    {result.entropy:.3f} nats")
+print(f"Winner:           {result.winner}")
+print(f"Confidence:       {result.confidence * 100:.2f}%")
+print(f"Entropy:          {result.entropy:.3f} nats")
+print(f"Conformal Set:    {result.conformal_set}")
+print(f"Escalate System2: {result.escalate_system2}")
 print(f"Full Distribution: {result.probabilities}")
 ```
+
 
 ### 2. Missing Modalities in Action
 
@@ -337,7 +341,39 @@ CLI flag execution:
 uv run python scripts/train_v1.py --mine-hard-negatives --contrastive-lambda 0.2 --margin-gamma 0.5
 ```
 
+### 6. Conformal Prediction Sets & System 2 Escalation Gate
+
+For safety-critical autonomous operations, a System 1 model must provide rigorous statistical guarantees rather than bare point predictions. ArbiterOmni implements inductive split conformal prediction to construct prediction sets with mathematically guaranteed $(1 - \alpha)$ coverage:
+
+$$P\left(Y_{\text{test}} \in C(X_{\text{test}})\right) \ge 1 - \alpha$$
+
+```python
+from arbiter_omni import ArbiterOmniEngine
+
+engine = ArbiterOmniEngine.from_pretrained("v1")
+
+# 1. Calibrate on held-out samples for 95% statistical coverage (alpha = 0.05)
+q_hat = engine.calibrate_conformal(held_out_samples, alpha=0.05, method="lac")
+
+# 2. Configure System 2 Escalation Gate
+engine.configure_escalation_gate(
+    entropy_threshold=0.95,  # Max allowable Shannon entropy before escalation
+    max_conformal_size=1,    # If >=2 candidates are needed for 95% coverage, escalate
+    min_confidence=0.50,     # If top-1 confidence < 0.50, escalate
+)
+
+# 3. Arbitrate decision
+result = engine.decide(question=..., candidates=...)
+
+print(f"Conformal Set:    {result.conformal_set}")      # e.g. ["proceed at nominal velocity"]
+print(f"Escalate System2: {result.escalate_system2}")   # True if ambiguity exceeds safety tolerance
+if result.escalate_system2:
+    print(f"Reason:           {result.escalation_reason}") # e.g. "AMBIGUOUS_CONFORMAL_SET (size 2 > 1)"
+    # Seamlessly route to slow deliberative System 2 reasoning (e.g. LLM chain-of-thought or operator)
+```
+
 ---
+
 
 
 ## 🎯 Jev System 1 Primitives

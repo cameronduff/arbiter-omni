@@ -50,6 +50,19 @@ class DecisionResult(BaseModel):
     latent_embedding: Optional[List[float]] = Field(
         default=None, description="Optional pooled multimodal decision latent vector."
     )
+    conformal_set: List[str] = Field(
+        default_factory=list,
+        description="Conformal prediction set guaranteeing 1-alpha statistical coverage.",
+    )
+    escalate_system2: bool = Field(
+        default=False,
+        description="Flag indicating that decision ambiguity or conformal set size exceeds tolerance, requiring System 2 escalation.",
+    )
+    escalation_reason: Optional[str] = Field(
+        default=None,
+        description="Diagnostic reason for System 2 escalation if triggered.",
+    )
+
 
 
 class MultimodalSample(BaseModel):

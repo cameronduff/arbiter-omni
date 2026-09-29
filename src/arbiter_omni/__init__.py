@@ -3,6 +3,10 @@ ArbiterOmni: Multimodal System 1 Decision Engine inspired by Jev.
 """
 
 from arbiter_omni.api.engine import ArbiterOmniEngine
+from arbiter_omni.calibration.conformal import (
+    ConformalCalibrator,
+    System2EscalationGate,
+)
 from arbiter_omni.data.cached import (
     CachedMultimodalDataset,
     collate_cached_multimodal_decision,
@@ -11,6 +15,7 @@ from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
 )
+
 from arbiter_omni.data.miner import (
     DEFAULT_CANDIDATE_POOL,
     HardNegativeMiner,
@@ -54,6 +59,7 @@ __all__ = [
     "BaseMultimodalFusion",
     "CLAPAudioEncoder",
     "CachedMultimodalDataset",
+    "ConformalCalibrator",
     "DEFAULT_CANDIDATE_POOL",
     "DecisionResult",
     "DynamicDecisionHead",
@@ -65,6 +71,8 @@ __all__ = [
     "MultimodalSample",
     "OpenCLIPMultimodalEncoder",
     "SpatioTemporalVideoAttention",
+    "System2EscalationGate",
+
     "TrainingConfig",
     "TransformerMultimodalFusion",
     "collate_cached_multimodal_decision",
