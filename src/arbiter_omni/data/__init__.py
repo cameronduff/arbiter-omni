@@ -2,9 +2,17 @@
 ArbiterOmni data loading and dataset generation package.
 """
 
+from arbiter_omni.data.ai2d import (
+    AI2DAdapter,
+    load_ai2d_dataset,
+)
 from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
+)
+from arbiter_omni.data.gqa import (
+    GQAAdapter,
+    load_gqa_dataset,
 )
 from arbiter_omni.data.robotics import (
     RoboticsActionAdapter,
@@ -27,6 +35,8 @@ from arbiter_omni.data.synthetic import (
 )
 
 __all__ = [
+    "AI2DAdapter",
+    "GQAAdapter",
     "MultimodalDecisionDataset",
     "RoboticsActionAdapter",
     "SEEDBenchAdapter",
@@ -38,6 +48,8 @@ __all__ = [
     "create_synthetic_image",
     "generate_robotics_samples",
     "generate_synthetic_dataset",
+    "load_ai2d_dataset",
+    "load_gqa_dataset",
     "load_scienceqa_dataset",
     "load_seedbench_dataset",
 ]
