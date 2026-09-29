@@ -1,6 +1,6 @@
 """
 Unit tests for the refactored open-domain interactive_demo module.
-Tests predict_arbitration, arbitrate_decision backward compatibility,
+Tests predict_arbitration (with Image, Video, and Audio), arbitrate_decision backward compatibility,
 the examples gallery structure, and Gradio Blocks construction.
 """
 
@@ -40,7 +40,7 @@ def test_predict_arbitration_basic():
     assert isinstance(score, float)
 
 
-def test_predict_arbitration_modalities():
+def test_predict_arbitration_image_modality():
     cat_img = "examples/assets/kitten.jpg"
     probs, conf, entropy, score = predict_arbitration(
         question="What animal is this?",
@@ -51,6 +51,18 @@ def test_predict_arbitration_modalities():
     )
     assert len(probs) == 3
     assert "Cat" in probs
+
+
+def test_predict_arbitration_video_modality():
+    vid_file = "examples/assets/sample_action.mp4"
+    probs, conf, entropy, score = predict_arbitration(
+        question="What movement is shown in this video clip?",
+        candidates_raw="Horizontal motion, Vertical drop, Circular rotation",
+        video=vid_file if os.path.exists(vid_file) else None,
+        temperature=0.7,
+    )
+    assert len(probs) == 3
+    assert all(0.0 <= p <= 1.0 for p in probs.values())
 
 
 def test_arbitrate_decision_legacy_compatibility():
@@ -73,15 +85,16 @@ def test_default_image_is_pil():
 
 
 def test_examples_gallery_structure():
-    assert len(EXAMPLES) >= 3
+    assert len(EXAMPLES) >= 4
     for ex in EXAMPLES:
-        # Schema: [question, candidates, image, audio, context, temperature]
-        assert len(ex) == 6
-        question, candidates, image, audio, context, temp = ex
+        # Schema: [question, candidates, image, video, audio, context, temperature]
+        assert len(ex) == 7
+        question, candidates, image, video, audio, context, temp = ex
         assert isinstance(question, str) and len(question) > 0
         assert isinstance(candidates, str) and len(candidates) > 0
         assert ("," in candidates or "\n" in candidates), "Candidates must contain multiple options"
         assert image is None or isinstance(image, (str, Image.Image))
+        assert video is None or isinstance(video, str)
         assert audio is None or isinstance(audio, str)
         assert isinstance(context, str)
         assert isinstance(temp, (int, float))
