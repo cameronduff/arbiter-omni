@@ -53,10 +53,19 @@ def _default_image() -> Image.Image:
     arr = np.full((224, 224, 3), (230, 140, 60), dtype=np.uint8)
     return Image.fromarray(arr)
 
+def _beagle_image() -> Image.Image:
+    for p in ["beagle.webp", "examples/assets/beagle.webp"]:
+        if os.path.exists(p):
+            try:
+                return Image.open(p).convert("RGB")
+            except Exception:
+                pass
+    return Image.new("RGB", (224, 224), (160, 100, 60))
+
 # ---------------------------------------------------------------------------
 # One-click examples — everyday, domain-agnostic tasks
 # ---------------------------------------------------------------------------
-# Each entry: [question, candidates (newline-separated), text_context, image, audio]
+# Each entry: [question, candidates (newline-separated), text_context, image, audio, temperature]
 def _solid(r: int, g: int, b: int, size: int = 224) -> Image.Image:
     return Image.fromarray(np.full((size, size, 3), (r, g, b), dtype=np.uint8))
 
@@ -67,6 +76,15 @@ EXAMPLES: List[List[Any]] = [
         "",
         _default_image(),   # Orange kitten photo
         None,
+        0.7,
+    ],
+    [
+        "What animal is in this image?",
+        "Cat\nDog\nHorse\nRabbit\nBird",
+        "",
+        _beagle_image(),    # Beagle hound dog photo
+        None,
+        0.7,
     ],
     [
         "What colour is the object?",
@@ -74,6 +92,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(60, 120, 220),    # blue patch
         None,
+        0.7,
     ],
     [
         "Is this image taken indoors or outdoors?",
@@ -81,6 +100,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(135, 185, 130),   # muted green — suggests outside
         None,
+        0.7,
     ],
     [
         "What type of vehicle is shown?",
@@ -88,6 +108,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(80, 80, 90),      # dark grey — vehicle-neutral
         None,
+        0.7,
     ],
     [
         "What is the weather like in this scene?",
@@ -95,6 +116,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(200, 215, 235),   # pale blue-grey — overcast sky
         None,
+        0.7,
     ],
     [
         "What emotion does this person appear to be expressing?",
@@ -102,6 +124,7 @@ EXAMPLES: List[List[Any]] = [
         "The subject is facing the camera directly.",
         _solid(240, 210, 185),   # skin-tone placeholder
         None,
+        0.7,
     ],
     [
         "What meal of the day does this food most resemble?",
@@ -109,6 +132,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(220, 160, 60),    # golden-yellow — food-like warmth
         None,
+        0.7,
     ],
     [
         "Is this true or false? The sky is blue.",
@@ -116,6 +140,7 @@ EXAMPLES: List[List[Any]] = [
         "",
         _solid(100, 160, 230),   # blue sky placeholder
         None,
+        0.7,
     ],
 ]
 
@@ -315,7 +340,7 @@ Single non-autoregressive forward pass · Calibrated probabilities · Works with
         # One-click example gallery (no dropdown, no scenarios)
         gr.Examples(
             examples=EXAMPLES,
-            inputs=[question_input, candidates_input, text_context, image_input, audio_input],
+            inputs=[question_input, candidates_input, text_context, image_input, audio_input, temperature_slider],
             outputs=[winner_output, probs_output, entropy_output, noul_output, score_output],
             fn=arbitrate_decision,
             cache_examples=False,

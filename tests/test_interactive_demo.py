@@ -84,9 +84,9 @@ def test_default_image_is_pil():
 def test_examples_gallery_structure():
     assert len(EXAMPLES) >= 4
     for ex in EXAMPLES:
-        # Each example: [question, candidates, text_context, image, audio]
-        assert len(ex) == 5
-        question, candidates, text_ctx, image, audio = ex
+        # Each example: [question, candidates, text_context, image, audio, optional temperature]
+        assert len(ex) in (5, 6)
+        question, candidates, text_ctx, image, audio = ex[:5]
         assert isinstance(question, str) and len(question) > 0
         assert "\n" in candidates, "Candidates must contain multiple options"
         assert isinstance(image, Image.Image) or image is None
