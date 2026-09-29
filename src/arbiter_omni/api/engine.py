@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 
 from arbiter_omni.calibration.conformal import ConformalCalibrator, System2EscalationGate
+from arbiter_omni.calibration.temperature import CalibrationSummary, TemperatureCalibrator
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
 from arbiter_omni.encoders.mock import MockMultimodalEncoder
 from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
@@ -45,6 +46,8 @@ class ArbiterOmniEngine:
         # Calibration & System 2 Escalation Gate
         self.conformal_calibrator = ConformalCalibrator()
         self.escalation_gate = System2EscalationGate()
+        self.temperature_calibrator = TemperatureCalibrator()
+        self.temperature: Optional[float] = None
 
 
     @classmethod
@@ -194,6 +197,62 @@ class ArbiterOmniEngine:
             enabled=enabled,
         )
 
+    def set_temperature(self, temperature: float) -> None:
+        """Sets the global post-hoc scaling temperature for output sharpening and calibration."""
+        self.temperature = float(temperature)
+        self.model.decision_head.set_temperature(temperature)
+
+    def calibrate_temperature(
+        self,
+        samples: Sequence[MultimodalSample],
+        lr: float = 0.05,
+        max_iter: int = 50,
+        n_bins: int = 10,
+    ) -> CalibrationSummary:
+        """
+        Calibrates post-hoc temperature scaling on held-out validation samples to minimize ECE.
+        
+        Args:
+            samples: Held-out validation samples with target_idx specified.
+            lr: Learning rate for L-BFGS optimizer.
+            max_iter: Max iterations.
+            n_bins: Number of bins for reliability diagram / ECE calculation.
+            
+        Returns:
+            CalibrationSummary with initial/calibrated ECE, NLL, and optimal temperature.
+        """
+        valid_samples = [s for s in samples if s.target_idx is not None]
+        if not valid_samples:
+            raise ValueError("Temperature calibration requires samples with ground truth target_idx.")
+
+        self.model.eval()
+        logits_list = []
+        targets = []
+
+        with torch.no_grad():
+            for s in valid_samples:
+                logits, _, _, _ = self.model(
+                    questions=[s.question],
+                    candidates=[list(s.candidates)],
+                    texts=[s.text],
+                    images=[s.image],
+                    videos=[s.video],
+                    audios=[s.audio],
+                    temperature=1.0,
+                )
+                logits_list.append(logits[0])
+                targets.append(s.target_idx)
+
+        summary = self.temperature_calibrator.fit(
+            logits_list=logits_list,
+            targets=targets,
+            lr=lr,
+            max_iter=max_iter,
+            n_bins=n_bins,
+        )
+        self.set_temperature(summary.optimal_temperature)
+        return summary
+
     def decide(
         self,
         question: str,
@@ -205,6 +264,7 @@ class ArbiterOmniEngine:
         return_embedding: bool = False,
         use_prompt_ensembling: Optional[bool] = None,
         prompt_templates: Optional[Sequence[str]] = None,
+        temperature: Optional[float] = None,
     ) -> DecisionResult:
         """
         Evaluates multimodal state and returns calibrated probability distribution over candidates.
@@ -220,6 +280,7 @@ class ArbiterOmniEngine:
             use_prompt_ensembling: If True (or None with visual input), averages candidate embeddings
                                   across descriptive templates to sharpen zero-shot visual alignment.
             prompt_templates: Optional custom templates (e.g. ['a photo of a {}', '{}']).
+            temperature: Optional inference temperature for output sharpening (<1.0) or softening (>1.0).
             
         Returns:
             DecisionResult containing top choice, full probabilities, entropy, and metrics.
@@ -242,6 +303,8 @@ class ArbiterOmniEngine:
         if use_prompt_ensembling is None:
             use_prompt_ensembling = (image is not None or video is not None)
 
+        temp_to_use = temperature if temperature is not None else self.temperature
+
         self.model.eval()
         with torch.no_grad():
             logits, probs, entropy, fused_context = self.model(
@@ -253,6 +316,7 @@ class ArbiterOmniEngine:
                 audios=[audio],
                 use_prompt_ensembling=use_prompt_ensembling,
                 prompt_templates=prompt_templates,
+                temperature=temp_to_use,
             )
 
             p_vec = probs[0].cpu().numpy().tolist()
@@ -304,6 +368,9 @@ class ArbiterOmniEngine:
         self,
         samples: Sequence[MultimodalSample],
         return_embedding: bool = False,
+        use_prompt_ensembling: Optional[bool] = None,
+        prompt_templates: Optional[Sequence[str]] = None,
+        temperature: Optional[float] = None,
     ) -> List[DecisionResult]:
         """Runs batched multimodal arbitration over a list of MultimodalSamples."""
         results: List[DecisionResult] = []
@@ -316,6 +383,9 @@ class ArbiterOmniEngine:
                 video=s.video,
                 audio=s.audio,
                 return_embedding=return_embedding,
+                use_prompt_ensembling=use_prompt_ensembling,
+                prompt_templates=prompt_templates,
+                temperature=temperature,
             )
             results.append(res)
         return results

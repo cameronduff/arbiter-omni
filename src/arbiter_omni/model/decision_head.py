@@ -83,6 +83,16 @@ class DynamicDecisionHead(nn.Module):
     def temperature(self) -> float:
         return float(torch.clamp(self.log_temp.exp(), min=0.01, max=100.0).item())
 
+    @temperature.setter
+    def temperature(self, val: float) -> None:
+        self.set_temperature(val)
+
+    def set_temperature(self, temperature: float) -> None:
+        """Sets the calibrated scaling temperature."""
+        temp_val = max(1e-3, float(temperature))
+        with torch.no_grad():
+            self.log_temp.copy_(torch.tensor(math.log(temp_val), dtype=torch.float32, device=self.log_temp.device))
+
     def forward(
         self,
         context_embed: torch.Tensor,
@@ -90,6 +100,7 @@ class DynamicDecisionHead(nn.Module):
         candidate_mask: Optional[torch.Tensor] = None,
         modality_embeds: Optional[Dict[Any, torch.Tensor]] = None,
         presence_mask: Optional[Dict[Any, Any]] = None,
+        temperature: Optional[float] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Calculates decision logits and probability distributions over dynamic candidates.
@@ -144,7 +155,10 @@ class DynamicDecisionHead(nn.Module):
                     pres_float = torch.tensor(img_present, dtype=torch.float32, device=candidate_embeds.device).unsqueeze(1)
                 raw_logits = raw_logits + (vis_sim * self.visual_scale * pres_float)
 
-        temp = torch.clamp(self.log_temp.exp(), min=0.01, max=100.0)
+        if temperature is not None:
+            temp = torch.tensor(max(0.01, float(temperature)), device=candidate_embeds.device)
+        else:
+            temp = torch.clamp(self.log_temp.exp(), min=0.01, max=100.0)
         scaled_logits = raw_logits / temp
 
         # Apply candidate mask if padded

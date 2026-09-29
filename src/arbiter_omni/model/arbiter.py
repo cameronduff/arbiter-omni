@@ -235,6 +235,7 @@ class ArbiterOmniModel(nn.Module):
         audios: Optional[Sequence[Any]] = None,
         use_prompt_ensembling: bool = False,
         prompt_templates: Optional[Sequence[str]] = None,
+        temperature: Optional[float] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         End-to-end forward pass:
@@ -274,6 +275,7 @@ class ArbiterOmniModel(nn.Module):
             candidate_mask=cnd_mask,
             modality_embeds=mod_embeds,
             presence_mask=presence_mask,
+            temperature=temperature,
         )
 
         return logits, probs, entropy, fused_context
@@ -286,6 +288,7 @@ class ArbiterOmniModel(nn.Module):
         candidate_embeds: torch.Tensor,
         candidate_mask: Optional[torch.Tensor] = None,
         image_patches: Optional[torch.Tensor] = None,
+        temperature: Optional[float] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Executes fusion and decision scoring directly on pre-computed encoder embeddings,
@@ -307,6 +310,7 @@ class ArbiterOmniModel(nn.Module):
             candidate_mask=candidate_mask,
             modality_embeds=modality_embeds,
             presence_mask=presence_mask,
+            temperature=temperature,
         )
 
         return logits, probs, entropy, fused_context
