@@ -81,7 +81,12 @@ def test_create_mock_seedbench_samples():
     assert has_image, "Expected some image samples in mock SEED-Bench"
 
 
-def test_load_seedbench_fallback():
+def test_load_seedbench_fallback(monkeypatch):
+    import urllib.request
+    def mock_urlopen(*args, **kwargs):
+        raise ConnectionError("Simulated offline condition")
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
     samples = load_seedbench_dataset(max_samples=5, use_mock_fallback=True)
-    assert len(samples) <= 5
+    assert len(samples) == 5
     assert all(isinstance(s, MultimodalSample) for s in samples)

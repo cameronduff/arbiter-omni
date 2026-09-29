@@ -45,8 +45,13 @@ def test_mock_scienceqa_samples_generation():
         assert s.text is not None
 
 
-def test_load_scienceqa_fallback():
-    # If network/HF is unavailable, load_scienceqa_dataset falls back to mock samples gracefully
+def test_load_scienceqa_fallback(monkeypatch):
+    # Simulate offline / network failure: verify load_scienceqa_dataset falls back to mock samples gracefully
+    import datasets
+    def mock_fail(*args, **kwargs):
+        raise ConnectionError("Simulated network disconnection")
+    monkeypatch.setattr(datasets, "load_dataset", mock_fail)
+
     samples = load_scienceqa_dataset(max_samples=5, use_mock_fallback=True)
-    assert len(samples) <= 5
+    assert len(samples) == 5
     assert all(isinstance(s, MultimodalSample) for s in samples)

@@ -133,16 +133,20 @@ def load_scienceqa_dataset(
         )
         ds = load_dataset("derek-thomas/ScienceQA", split=split, streaming=streaming)
         samples: List[MultimodalSample] = []
+        try:
+            for record in ds:
+                if only_multimodal and record.get("image") is None:
+                    continue
 
-        for record in ds:
-            if only_multimodal and record.get("image") is None:
-                continue
+                sample = ScienceQAAdapter.record_to_sample(record)
+                samples.append(sample)
 
-            sample = ScienceQAAdapter.record_to_sample(record)
-            samples.append(sample)
-
-            if max_samples is not None and len(samples) >= max_samples:
-                break
+                if max_samples is not None and len(samples) >= max_samples:
+                    break
+        except Exception as iter_e:
+            logger.warning(f"Interruption while streaming ScienceQA records: {iter_e}")
+            if not samples:
+                raise iter_e
 
         logger.info(f"Successfully loaded {len(samples)} real ScienceQA samples.")
         return samples
