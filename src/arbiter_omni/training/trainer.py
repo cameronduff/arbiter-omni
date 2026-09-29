@@ -24,7 +24,9 @@ from arbiter_omni.data.cached import (
 )
 from arbiter_omni.device import resolve_device, get_device_telemetry
 from arbiter_omni.model.arbiter import ArbiterOmniModel
+from arbiter_omni.model.decision_head import contrastive_margin_loss
 from arbiter_omni.training.config import TrainingConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,7 @@ class ArbiterOmniTrainer:
         self.model.encoder.eval()  # Keep encoder in eval mode (dropout/layernorm frozen)
 
         total_loss = 0.0
+        total_margin_loss = 0.0
         correct = 0
         total_samples = 0
         total_entropy = 0.0
@@ -111,14 +114,18 @@ class ArbiterOmniTrainer:
                 enabled=self.amp_enabled,
             ):
                 if batch.get("is_cached", False):
+                    cand_mask = batch["candidate_mask"].to(self.device)
                     logits, probs, entropy, _ = self.model.forward_cached(
                         question_embed=batch["question_embed"].to(self.device),
                         modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                         presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
                         candidate_embeds=batch["candidate_embeds"].to(self.device),
-                        candidate_mask=batch["candidate_mask"].to(self.device),
+                        candidate_mask=cand_mask,
                     )
                 else:
+                    cand_mask = batch.get("candidate_mask", None)
+                    if cand_mask is not None and isinstance(cand_mask, torch.Tensor):
+                        cand_mask = cand_mask.to(self.device)
                     logits, probs, entropy, _ = self.model(
                         questions=batch["questions"],
                         candidates=batch["candidates"],
@@ -127,7 +134,20 @@ class ArbiterOmniTrainer:
                         videos=batch["videos"],
                         audios=batch["audios"],
                     )
-                raw_loss = self.criterion(logits, targets)
+
+                ce_loss = self.criterion(logits, targets)
+                if self.config.contrastive_lambda > 0.0:
+                    margin_loss = contrastive_margin_loss(
+                        logits=logits,
+                        targets=targets,
+                        candidate_mask=cand_mask,
+                        margin=self.config.margin_gamma,
+                    )
+                    raw_loss = ce_loss + self.config.contrastive_lambda * margin_loss
+                else:
+                    margin_loss = torch.tensor(0.0, device=self.device)
+                    raw_loss = ce_loss
+
                 loss = raw_loss / accum_steps
 
             self.scaler.scale(loss).backward()
@@ -147,6 +167,7 @@ class ArbiterOmniTrainer:
             correct += int((preds == targets).sum().item())
             total_samples += len(targets)
             total_loss += float(raw_loss.item()) * len(targets)
+            total_margin_loss += float(margin_loss.item()) * len(targets)
             total_entropy += float(entropy.sum().item())
 
         elapsed = max(1e-5, time.perf_counter() - start_time)
@@ -159,6 +180,7 @@ class ArbiterOmniTrainer:
             "loss": avg_loss,
             "accuracy": accuracy,
             "entropy": avg_entropy,
+            "margin_loss": total_margin_loss / max(1, total_samples),
             "temperature": self.model.decision_head.temperature,
             "samples_per_sec": samples_per_sec,
         }
@@ -173,6 +195,7 @@ class ArbiterOmniTrainer:
         self.model.eval()
 
         total_loss = 0.0
+        total_margin_loss = 0.0
         correct = 0
         total_samples = 0
         total_entropy = 0.0
@@ -191,14 +214,18 @@ class ArbiterOmniTrainer:
                     enabled=self.amp_enabled,
                 ):
                     if batch.get("is_cached", False):
+                        cand_mask = batch["candidate_mask"].to(self.device)
                         logits, probs, entropy, _ = self.model.forward_cached(
                             question_embed=batch["question_embed"].to(self.device),
                             modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                             presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
                             candidate_embeds=batch["candidate_embeds"].to(self.device),
-                            candidate_mask=batch["candidate_mask"].to(self.device),
+                            candidate_mask=cand_mask,
                         )
                     else:
+                        cand_mask = batch.get("candidate_mask", None)
+                        if cand_mask is not None and isinstance(cand_mask, torch.Tensor):
+                            cand_mask = cand_mask.to(self.device)
                         logits, probs, entropy, _ = self.model(
                             questions=batch["questions"],
                             candidates=batch["candidates"],
@@ -208,12 +235,24 @@ class ArbiterOmniTrainer:
                             audios=batch["audios"],
                         )
 
-                    loss = self.criterion(logits, targets)
+                    ce_loss = self.criterion(logits, targets)
+                    if self.config.contrastive_lambda > 0.0:
+                        margin_loss = contrastive_margin_loss(
+                            logits=logits,
+                            targets=targets,
+                            candidate_mask=cand_mask,
+                            margin=self.config.margin_gamma,
+                        )
+                        loss = ce_loss + self.config.contrastive_lambda * margin_loss
+                    else:
+                        margin_loss = torch.tensor(0.0, device=self.device)
+                        loss = ce_loss
 
                 preds = torch.argmax(probs, dim=-1)
                 correct += int((preds == targets).sum().item())
                 total_samples += len(targets)
                 total_loss += float(loss.item()) * len(targets)
+                total_margin_loss += float(margin_loss.item()) * len(targets)
                 total_entropy += float(entropy.sum().item())
 
         avg_loss = total_loss / max(1, total_samples)
@@ -224,6 +263,7 @@ class ArbiterOmniTrainer:
             "val_loss": avg_loss,
             "val_accuracy": accuracy,
             "val_entropy": avg_entropy,
+            "val_margin_loss": total_margin_loss / max(1, total_samples),
         }
 
     def fit(
@@ -269,8 +309,11 @@ class ArbiterOmniTrainer:
             "loss": [],
             "accuracy": [],
             "entropy": [],
+            "margin_loss": [],
             "val_loss": [],
             "val_accuracy": [],
+            "val_entropy": [],
+            "val_margin_loss": [],
         }
 
         for epoch in range(1, self.config.num_epochs + 1):
@@ -278,13 +321,17 @@ class ArbiterOmniTrainer:
             history["loss"].append(train_metrics["loss"])
             history["accuracy"].append(train_metrics["accuracy"])
             history["entropy"].append(train_metrics["entropy"])
+            history["margin_loss"].append(train_metrics.get("margin_loss", 0.0))
 
             val_str = ""
             if val_loader is not None:
                 val_metrics = self.evaluate(val_loader)
                 history["val_loss"].append(val_metrics["val_loss"])
                 history["val_accuracy"].append(val_metrics["val_accuracy"])
+                history["val_entropy"].append(val_metrics.get("val_entropy", 0.0))
+                history["val_margin_loss"].append(val_metrics.get("val_margin_loss", 0.0))
                 val_str = f" | Val Loss: {val_metrics['val_loss']:.4f} | Val Acc: {val_metrics['val_accuracy']*100:.1f}%"
+
 
             speed_str = f"{train_metrics.get('samples_per_sec', 0.0):.1f} samples/s"
             logger.info(

@@ -28,3 +28,8 @@ class TrainingConfig:
     accumulate_grad_batches: int = 1
     pin_memory: bool = True
     num_workers: int = 0
+
+    # Hard-Negative Contrastive Margin Loss
+    contrastive_lambda: float = 0.0
+    margin_gamma: float = 0.5
+
