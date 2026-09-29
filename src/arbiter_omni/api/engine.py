@@ -195,7 +195,6 @@ class ArbiterOmniEngine:
         )
 
     def decide(
-
         self,
         question: str,
         candidates: Sequence[str],
@@ -204,6 +203,8 @@ class ArbiterOmniEngine:
         video: Optional[Any] = None,
         audio: Optional[Any] = None,
         return_embedding: bool = False,
+        use_prompt_ensembling: Optional[bool] = None,
+        prompt_templates: Optional[Sequence[str]] = None,
     ) -> DecisionResult:
         """
         Evaluates multimodal state and returns calibrated probability distribution over candidates.
@@ -216,6 +217,9 @@ class ArbiterOmniEngine:
             video: Optional list of frames, video tensor, or video path.
             audio: Optional audio waveform, array, or audio path.
             return_embedding: If True, includes the fused latent vector in DecisionResult.
+            use_prompt_ensembling: If True (or None with visual input), averages candidate embeddings
+                                  across descriptive templates to sharpen zero-shot visual alignment.
+            prompt_templates: Optional custom templates (e.g. ['a photo of a {}', '{}']).
             
         Returns:
             DecisionResult containing top choice, full probabilities, entropy, and metrics.
@@ -234,6 +238,10 @@ class ArbiterOmniEngine:
         if audio is not None:
             active.append(ModalityType.AUDIO.value)
 
+        # Prompt ensembling defaults to active when visual inputs are provided
+        if use_prompt_ensembling is None:
+            use_prompt_ensembling = (image is not None or video is not None)
+
         self.model.eval()
         with torch.no_grad():
             logits, probs, entropy, fused_context = self.model(
@@ -243,6 +251,8 @@ class ArbiterOmniEngine:
                 images=[image],
                 videos=[video],
                 audios=[audio],
+                use_prompt_ensembling=use_prompt_ensembling,
+                prompt_templates=prompt_templates,
             )
 
             p_vec = probs[0].cpu().numpy().tolist()

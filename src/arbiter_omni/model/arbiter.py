@@ -9,12 +9,20 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
 from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.fusion.transformer import TransformerMultimodalFusion
 from arbiter_omni.model.decision_head import DynamicDecisionHead
 from arbiter_omni.types import ModalityType
+
+DEFAULT_PROMPT_TEMPLATES: Tuple[str, ...] = (
+    "a photo of a {}",
+    "a picture of a {}",
+    "an image showing {}",
+    "{}",
+)
 
 
 class ArbiterOmniModel(nn.Module):
@@ -143,29 +151,54 @@ class ArbiterOmniModel(nn.Module):
         return q_embed, modality_embeds, presence_mask, image_patches
 
 
-    def encode_candidates(self, candidates_batch: Sequence[Sequence[str]]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def encode_candidates(
+        self,
+        candidates_batch: Sequence[Sequence[str]],
+        prompt_templates: Optional[Sequence[str]] = None,
+        use_prompt_ensembling: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Encodes variable numbers of candidate decision strings across a batch.
         Pads to maximum candidates in the batch and creates candidate_mask.
+        If use_prompt_ensembling is True, averages normalized embeddings across prompt_templates
+        to reduce prompt variance and boost zero-shot visual discrimination.
         
         Returns:
             candidate_embeds: [B, max_K, candidate_dim]
             candidate_mask: [B, max_K] boolean tensor
         """
         B = len(candidates_batch)
-        max_K = max(len(cands) for cands in candidates_batch)
+        max_K = max((len(cands) for cands in candidates_batch), default=0)
         device = self.device
 
         candidate_embeds = torch.zeros((B, max_K, self.encoder.text_dim), device=device)
         candidate_mask = torch.zeros((B, max_K), dtype=torch.bool, device=device)
 
+        templates = prompt_templates if prompt_templates is not None else DEFAULT_PROMPT_TEMPLATES
+
         # Flatten all unique candidates or per-sample candidates
         for i, cands in enumerate(candidates_batch):
             k = len(cands)
-            if k > 0:
+            if k == 0:
+                continue
+
+            if use_prompt_ensembling and templates:
+                # Prompt template ensembling
+                all_prompts: List[str] = []
+                for c in cands:
+                    for t in templates:
+                        all_prompts.append(t.format(c) if "{}" in t else f"{t} {c}")
+                all_encoded = self.encoder.encode_text(all_prompts).to(device)
+                num_t = len(templates)
+                reshaped = all_encoded.view(k, num_t, -1)
+                avg_encoded = reshaped.mean(dim=1)
+                avg_encoded = F.normalize(avg_encoded, p=2, dim=-1)
+                candidate_embeds[i, :k, :] = avg_encoded
+            else:
                 encoded = self.encoder.encode_text(cands).to(device)
                 candidate_embeds[i, :k, :] = encoded
-                candidate_mask[i, :k] = True
+
+            candidate_mask[i, :k] = True
 
         return candidate_embeds, candidate_mask
 
@@ -177,6 +210,8 @@ class ArbiterOmniModel(nn.Module):
         images: Optional[Sequence[Any]] = None,
         videos: Optional[Sequence[Any]] = None,
         audios: Optional[Sequence[Any]] = None,
+        use_prompt_ensembling: bool = False,
+        prompt_templates: Optional[Sequence[str]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         End-to-end forward pass:
@@ -201,7 +236,11 @@ class ArbiterOmniModel(nn.Module):
             image_patches=image_patches,
         )
 
-        cnd_embeds, cnd_mask = self.encode_candidates(candidates)
+        cnd_embeds, cnd_mask = self.encode_candidates(
+            candidates,
+            prompt_templates=prompt_templates,
+            use_prompt_ensembling=use_prompt_ensembling,
+        )
 
         logits, probs, entropy = self.decision_head(
             context_embed=fused_context,
