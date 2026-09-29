@@ -25,13 +25,23 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     def __init__(
         self,
         model_name: str = "ViT-B-32",
-        pretrained: str = "laion2b_s34b_b79k",
+        pretrained: Optional[str] = None,
         device: Optional[torch.device] = None,
         enable_clap_weights: bool = False,
         use_temporal_attention: bool = True,
     ):
         super().__init__(device=device)
         self.model_name = model_name
+
+        # Auto-resolve pretrained dataset tag if not specified or default is passed
+        if pretrained is None or pretrained == "laion2b_s34b_b79k":
+            if model_name == "ViT-B-16":
+                pretrained = "laion2b_s34b_b88k"
+            else:
+                pretrained = "laion2b_s34b_b79k"
+        elif model_name == "ViT-B-32" and pretrained == "laion2b_s34b_b88k":
+            pretrained = "laion2b_s34b_b79k"
+
         self.pretrained = pretrained
         self._dim = 512
         self.use_temporal_attention = use_temporal_attention
@@ -115,7 +125,8 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         """
         Extracts unpooled 2D spatial patch tokens from OpenCLIP visual transformer.
         Returns:
-            [B, P, image_dim] tensor of normalized patch embeddings (P = 49 for ViT-B-32).
+            [B, P, image_dim] tensor of normalized patch embeddings
+            (P = 49 for ViT-B-32 [7x7 grid], P = 196 for ViT-B-16 [14x14 grid]).
         """
         processed_tensors = []
         for img in images:

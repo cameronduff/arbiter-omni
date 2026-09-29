@@ -31,6 +31,12 @@ def test_mock_encoder_spatial_patches():
     norms = patches.norm(dim=-1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
 
+    # Test 196 patches (ViT-B-16 resolution)
+    patches_196 = encoder.encode_image_patches(images, num_patches=196)
+    assert patches_196.shape == (2, 196, 128)
+    norms_196 = patches_196.norm(dim=-1)
+    assert torch.allclose(norms_196, torch.ones_like(norms_196), atol=1e-5)
+
 
 def test_openclip_encoder_spatial_patches():
     """Validates OpenCLIP unpooled 7x7 spatial patch token extraction from ViT-B-32."""
@@ -47,6 +53,33 @@ def test_openclip_encoder_spatial_patches():
     assert patches.shape == (2, 49, 512)
     norms = patches.norm(dim=-1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-4)
+
+
+def test_openclip_encoder_spatial_patches_vit_b16():
+    """Validates OpenCLIP unpooled 14x14 spatial patch token extraction from ViT-B-16 (196 tokens)."""
+    try:
+        encoder = OpenCLIPMultimodalEncoder(model_name="ViT-B-16", device="cpu")
+    except Exception as e:
+        pytest.skip(f"OpenCLIP weights unavailable offline: {e}")
+
+    images = [
+        Image.new("RGB", (224, 224), color=(100, 150, 200)),
+        Image.new("RGB", (224, 224), color=(50, 80, 120)),
+    ]
+    patches = encoder.encode_image_patches(images)
+    assert patches.shape == (2, 196, 512)
+    norms = patches.norm(dim=-1)
+    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-4)
+
+    # Test end-to-end forward pass with ArbiterOmniModel
+    model = ArbiterOmniModel(encoder=encoder, hidden_dim=256, scoring_dim=256)
+    logits, probs, entropy, fused = model(
+        questions=["Is this a landscape?", "Is this an ocean?"],
+        candidates=[["yes", "no"], ["yes", "no"]],
+        images=images,
+    )
+    assert probs.shape == (2, 2)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(2), atol=1e-5)
 
 
 def test_transformer_fusion_spatial_patches_cross_attention():

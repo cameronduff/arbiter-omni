@@ -54,7 +54,7 @@ class ArbiterOmniEngine:
         hidden_dim: int = 256,
         scoring_dim: int = 256,
         openclip_model: str = "ViT-B-32",
-        pretrained_dataset: str = "laion2b_s34b_b79k",
+        pretrained_dataset: Optional[str] = None,
         device: Optional[Union[str, torch.device]] = None,
     ) -> ArbiterOmniEngine:
         """
@@ -64,8 +64,8 @@ class ArbiterOmniEngine:
             encoder_type: 'mock' for lightweight instant testing, or 'openclip' for production CLIP.
             hidden_dim: Fusion latent dimension.
             scoring_dim: Decision interaction dimension.
-            openclip_model: OpenCLIP architecture name.
-            pretrained_dataset: OpenCLIP checkpoint tag.
+            openclip_model: OpenCLIP architecture name ('ViT-B-32' or 'ViT-B-16').
+            pretrained_dataset: Optional OpenCLIP checkpoint tag (auto-resolved if None).
             device: Optional torch device.
         """
         dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
