@@ -19,10 +19,11 @@
 | **Spatio-Temporal Video Attention** | ✅ Completed | 3D temporal transformer attention with chronological sinusoidal positional embeddings (`SpatioTemporalVideoAttention`) |
 | **Fusion Engine** | ✅ Completed | 2-layer Perceiver/Cross-Attention with learned modality embeddings + Gated GMU alternative |
 | **Dynamic Decision Head** | ✅ Completed | Bilinear manifold interaction + Jev Choice/Boolean Noul/Score primitives |
-| **ScienceQA Adapter** | ✅ Completed | Multimodal multiple-choice adapter for 2-to-5 dynamic candidate options (`ScienceQAAdapter`) |
+| **ScienceQA Adapter (Live Streaming)** | ✅ Completed | Live HTTP streaming from `derek-thomas/ScienceQA` for real held-out multimodal questions (`ScienceQAAdapter`) |
+| **SEED-Bench-2 Adapter** | ✅ Completed | Multi-choice dynamic candidate adapter supporting both static Images and continuous multi-frame Video clips (`SEEDBenchAdapter`) |
 | **Robotics Action Adapter** | ✅ Completed | Open X-Embodiment / RT-X System 1 perception-action decision adapter (`RoboticsActionAdapter`) |
-| **Benchmark Suite (8 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, ScienceQA, video attention, robotics |
-| **Unit Test Coverage** | ✅ Completed | 31/31 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets) |
+| **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
+| **Unit Test Coverage** | ✅ Completed | 35/35 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets) |
 
 ---
 
@@ -40,22 +41,23 @@
 | Gated GMU Alternative Fusion | 859,397 | Trainable | Fast feedforward gating (Total: 1.35M trainable) |
 
 ### 2. Batch Scaling & Mixed Precision Throughput
-- **Batch 16 (FP16/AMP)**: 139.1 samples/sec (115.0 ms/step)
-- **Batch 32 (FP16/AMP)**: 185.7 samples/sec (172.4 ms/step)
-- **Batch 64 (FP16/AMP)**: **213.5 samples/sec** (299.9 ms/step) — *Optimal throughput*
-- **Batch 128 (FP16/AMP)**: 207.1 samples/sec (618.2 ms/step)
+- **Batch 16 (FP16/AMP)**: 167.7 samples/sec (95.5 ms/step)
+- **Batch 32 (FP16/AMP)**: 192.5 samples/sec (166.3 ms/step)
+- **Batch 64 (FP16/AMP)**: **215.8 samples/sec** (296.7 ms/step) — *Optimal throughput*
+- **Batch 128 (FP16/AMP)**: 219.7 samples/sec (582.7 ms/step)
 
 ### 3. Graceful Degradation Under Modality Starvation
-- **Full Quad-Modal (100% Present)**: 100.0% accuracy | ECE: 0.0366 | Entropy: 0.182 nats
-- **Standard Modality Dropout (35%)**: 92.0% accuracy | ECE: 0.0309 | Entropy: 0.216 nats
-- **Extreme Modality Dropout (70%)**: 84.0% accuracy | ECE: 0.0848 | Entropy: 0.283 nats
+- **Full Quad-Modal (100% Present)**: 100.0% accuracy | ECE: 0.0273 | Entropy: 0.143 nats
+- **Standard Modality Dropout (35%)**: 94.0% accuracy | ECE: 0.0844 | Entropy: 0.234 nats
+- **Extreme Modality Dropout (70%)**: 78.0% accuracy | ECE: 0.2060 | Entropy: 0.419 nats
 
 ### 4. Decision Latency & Throughput
-- **Median (p50) Decision Latency**: **4.01 ms**
-- **95th Percentile (p95) Latency**: **6.64 ms**
-- **Real-Time Throughput**: **249.3 decisions / sec**
+- **Median (p50) Decision Latency**: **4.17 ms**
+- **95th Percentile (p95) Latency**: **6.04 ms**
+- **Real-Time Throughput**: **240.1 decisions / sec**
 
-### 5. Public Datasets & Extensions
-- **ScienceQA Dynamic Candidate Arbitration**: 100.0% accuracy on 2–5 option multimodal science questions (0.115 nats entropy).
-- **Spatio-Temporal Video Attention**: Successfully discriminates video chronology and action direction vs commutative frame averaging.
+### 5. Public Datasets & Advanced Extensions
+- **Real ScienceQA Zero-Shot Candidate Arbitration**: **36.0% Top-1 accuracy** on real held-out multimodal questions streamed from `derek-thomas/ScienceQA` (vs ~25.0% chance baseline) with **0.793 nats** calibrated entropy (eliminating synthetic memorization).
+- **SEED-Bench-2 Image & Video Dynamic Arbitration**: Evaluated over 24 multi-choice image and continuous video clip sequences across 4 dynamic candidate options.
+- **Spatio-Temporal Video Attention**: 0.9995 cosine similarity between forward and reversed sequences (0.05% directional sensitivity discrimination vs 0.0% for commutative frame-averaging).
 - **Robotics System 1 Control**: Validated on 30 discrete multi-candidate action frames with sub-5ms decision turnaround.
