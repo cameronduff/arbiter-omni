@@ -43,11 +43,13 @@ class ArbiterOmniModel(nn.Module):
         hidden_dim: int = 256,
         scoring_dim: int = 256,
         use_spatial_patches: bool = True,
+        modality_dropout_prob: float = 0.0,
     ):
         super().__init__()
         self.encoder = encoder
         self.encoder.freeze()  # Guarantee encoders are frozen
         self.use_spatial_patches = use_spatial_patches
+        self.modality_dropout_prob = modality_dropout_prob
 
 
         # Setup default fusion if none supplied
@@ -202,6 +204,27 @@ class ArbiterOmniModel(nn.Module):
 
         return candidate_embeds, candidate_mask
 
+    def apply_modality_dropout(
+        self, presence_mask: Dict[Any, torch.Tensor]
+    ) -> Dict[Any, torch.Tensor]:
+        """
+        Randomly drops present sensory modalities with probability modality_dropout_prob during training.
+        Prevents text/visual shortcuts and forces the fusion engine to learn invariant multi-sensory representations.
+        """
+        if not self.training or self.modality_dropout_prob <= 0.0:
+            return presence_mask
+
+        dropped: Dict[Any, torch.Tensor] = {}
+        for mod, mask in presence_mask.items():
+            if not isinstance(mask, torch.Tensor):
+                mask_t = torch.tensor(mask, device=self.device)
+            else:
+                mask_t = mask
+            rand = torch.rand_like(mask_t.float())
+            keep = rand >= self.modality_dropout_prob
+            dropped[mod] = mask_t & keep
+        return dropped
+
     def forward(
         self,
         questions: Sequence[str],
@@ -228,6 +251,9 @@ class ArbiterOmniModel(nn.Module):
         q_embed, mod_embeds, presence_mask, image_patches = self.encode_inputs(
             questions=questions, texts=texts, images=images, videos=videos, audios=audios
         )
+
+        if self.training and self.modality_dropout_prob > 0.0:
+            presence_mask = self.apply_modality_dropout(presence_mask)
 
         fused_context = self.fusion(
             question_embed=q_embed,
@@ -265,6 +291,9 @@ class ArbiterOmniModel(nn.Module):
         Executes fusion and decision scoring directly on pre-computed encoder embeddings,
         bypassing perception forward passes.
         """
+        if self.training and self.modality_dropout_prob > 0.0:
+            presence_mask = self.apply_modality_dropout(presence_mask)
+
         fused_context = self.fusion(
             question_embed=question_embed,
             modality_embeds=modality_embeds,

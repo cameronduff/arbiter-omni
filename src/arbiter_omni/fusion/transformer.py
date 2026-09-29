@@ -37,8 +37,12 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         num_layers: int = 2,
         dim_feedforward: int = 512,
         dropout: float = 0.1,
+        condition_query_on_question: bool = False,
+        enable_spatial_cross_attention: bool = False,
     ):
         super().__init__(hidden_dim=hidden_dim)
+        self.condition_query_on_question = condition_query_on_question
+        self.enable_spatial_cross_attention = enable_spatial_cross_attention
 
         # Projections for each input stream to shared hidden dimension
         self.projections = nn.ModuleDict()
@@ -59,6 +63,13 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         # Spatial 2D patch positional embeddings for fine-grained visual grounding
         self.max_spatial_patches = 196
         self.spatial_pos_embed = nn.Parameter(torch.randn(1, 196, hidden_dim) * 0.02)
+
+        # Optional Question-Conditioned Cross-Attention over visual spatial patches
+        if enable_spatial_cross_attention:
+            self.spatial_cross_attn = nn.MultiheadAttention(
+                embed_dim=hidden_dim, num_heads=num_heads, dropout=dropout, batch_first=True
+            )
+            self.cross_norm = nn.LayerNorm(hidden_dim)
 
         # Transformer encoder layers
         encoder_layer = nn.TransformerEncoderLayer(
@@ -97,14 +108,17 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         batch_size = question_embed.shape[0]
         device = question_embed.device
 
-        # Token 0: Decision Query
-        query_token = self.decision_query.expand(batch_size, -1, -1) + self.modality_type_embed(
-            torch.tensor(0, device=device)
-        )
-
         # Token 1: Question
         q_proj = self.projections["question"](question_embed).unsqueeze(1)
         q_token = q_proj + self.modality_type_embed(torch.tensor(1, device=device))
+
+        # Token 0: Decision Query (optionally conditioned on question representation)
+        query_base = self.decision_query.expand(batch_size, -1, -1)
+        if self.condition_query_on_question:
+            query_base = query_base + q_proj
+        query_token = query_base + self.modality_type_embed(
+            torch.tensor(0, device=device)
+        )
 
         token_list = [query_token, q_token]
         mask_list = [
@@ -142,12 +156,31 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             patch_type = self.modality_type_embed(torch.tensor(3, device=device))
             patch_tokens = patch_proj + patch_pos + patch_type
 
-            token_list.append(patch_tokens)
             img_present = presence_mask.get(
                 ModalityType.IMAGE, torch.zeros(batch_size, dtype=torch.bool, device=device)
             )
             # If image missing, mask out all spatial patches
             patch_mask = (~img_present).unsqueeze(1).expand(-1, P)
+
+            # Optional Question-Conditioned Cross-Attention over visual patches
+            if self.enable_spatial_cross_attention and hasattr(self, "spatial_cross_attn"):
+                if img_present.any():
+                    safe_mask = patch_mask.clone()
+                    if (~img_present).any():
+                        safe_mask[~img_present, 0] = False
+                    q_cross, _ = self.spatial_cross_attn(
+                        query=q_token,
+                        key=patch_tokens,
+                        value=patch_tokens,
+                        key_padding_mask=safe_mask,
+                    )
+                    # Zero out for samples where image is missing
+                    q_cross = q_cross * img_present.float().unsqueeze(1).unsqueeze(2)
+                    q_token = self.cross_norm(q_token + q_cross)
+                    # Update q_token in token_list
+                    token_list[1] = q_token
+
+            token_list.append(patch_tokens)
             mask_list.append(patch_mask)
 
         # Shape: [B, Seq_Len, hidden_dim]

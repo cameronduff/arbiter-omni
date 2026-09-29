@@ -33,3 +33,6 @@ class TrainingConfig:
     contrastive_lambda: float = 0.0
     margin_gamma: float = 0.5
 
+    # Modality Dropout Regularization [AO-14]
+    modality_dropout_prob: float = 0.0  # Fraction of present sensory modalities dropped during training (e.g. 0.15)
+

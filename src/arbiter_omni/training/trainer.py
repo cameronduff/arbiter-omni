@@ -54,6 +54,9 @@ class ArbiterOmniTrainer:
 
         # Enforce that encoder parameters are frozen
         self.model.encoder.freeze()
+        if hasattr(self.config, "modality_dropout_prob") and self.config.modality_dropout_prob > 0.0:
+            self.model.modality_dropout_prob = self.config.modality_dropout_prob
+
         trainable = self.model.trainable_parameters()
         if len(trainable) == 0:
             raise ValueError("No trainable parameters found in fusion or decision head!")

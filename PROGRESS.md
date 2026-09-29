@@ -35,8 +35,9 @@
 | **Perceptual Residual Alignment** | ✅ Completed | Direct zero-shot perceptual skip-connection in `DynamicDecisionHead` preserving foundation model zero-shot mapping |
 | **Candidate Prompt Template Ensembling** | ✅ Completed | `DEFAULT_PROMPT_TEMPLATES` multi-template candidate ensembling in `encode_candidates` & `engine.decide` (+23.8% confidence boost) |
 | **ViT-B-16 Visual Backbone (196 Patches)** | ✅ Completed | Upgraded visual encoder to OpenCLIP `ViT-B-16` extracting $14 \times 14 = 196$ unpooled spatial tokens with auto-resolved `laion2b_s34b_b88k` checkpoint tag |
+| **Modality Dropout & Cross-Attention** | ✅ Completed | `apply_modality_dropout` ($p=0.15$) + question-conditioned decision queries + multi-head spatial cross-attention with safe masking |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 97/97 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16 196 patch grounding) |
+| **Unit Test Coverage** | ✅ Completed | 101/101 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16, modality dropout, cross-attention) |
 
 
 
@@ -113,6 +114,12 @@
 - **Zero-Config Checkpoint Tag Resolution**: `OpenCLIPMultimodalEncoder` and `ArbiterOmniEngine.create()` automatically resolve the optimal pretraining tag (`laion2b_s34b_b88k`) for ViT-B-16 without manual string configuration.
 - **Architectural Harmony**: Plugs directly into `TransformerMultimodalFusion` ($196 \times 256$ spatial positional embeddings) and existing `arbiter_omni_v1.pt` checkpoint with 0 dimensional mismatch.
 - **High-Fidelity Decision Disambiguation**: Resolves minute visual details (whiskers, diagram labels, small object boundaries) previously blurred out by coarse $32 \times 32$ patch strides.
+
+### 11. Modality Dropout & Question-Conditioned Cross-Attention
+- **Modality Dropout Regularization**: `apply_modality_dropout()` during training randomly masks present sensory modalities with probability $p = 0.15$ (configured via `TrainingConfig.modality_dropout_prob`), preventing text shortcuts and compelling the fusion network to learn robust multi-sensory representations.
+- **Question-Conditioned Decision Query**: In `TransformerMultimodalFusion`, the latent decision query token is directly conditioned by the projected question embedding ($\mathbf{z}_{\text{query}} = \mathbf{e}_{\text{query}} + \mathbf{W}_q \mathbf{x}_{\text{question}} + \mathbf{e}_{\text{type}}(0)$), priming the arbitration state with the target question from layer 0.
+- **Visual Spatial Cross-Attention**: Dedicated multi-head cross-attention layer (`nn.MultiheadAttention`) where question tokens explicitly attend to unpooled visual spatial patch tokens with safe padding masks, completely eliminating PyTorch `NaN` edge cases when vision is missing.
+
 
 
 
