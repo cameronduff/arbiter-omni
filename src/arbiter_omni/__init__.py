@@ -12,9 +12,17 @@ from arbiter_omni.data.synthetic import (
     create_synthetic_image,
     generate_synthetic_dataset,
 )
+from arbiter_omni.device import (
+    configure_cpu_threads,
+    get_device_telemetry,
+    print_device_diagnostics,
+    resolve_device,
+)
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
+from arbiter_omni.encoders.clap import CLAPAudioEncoder
 from arbiter_omni.encoders.mock import MockMultimodalEncoder
 from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
+from arbiter_omni.encoders.temporal import SpatioTemporalVideoAttention
 from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.fusion.gated import GatedMultimodalFusion
 from arbiter_omni.fusion.transformer import TransformerMultimodalFusion
@@ -32,6 +40,7 @@ __all__ = [
     "ArbiterOmniTrainer",
     "BaseMultimodalEncoder",
     "BaseMultimodalFusion",
+    "CLAPAudioEncoder",
     "DecisionResult",
     "DynamicDecisionHead",
     "GatedMultimodalFusion",
@@ -40,10 +49,15 @@ __all__ = [
     "MultimodalDecisionDataset",
     "MultimodalSample",
     "OpenCLIPMultimodalEncoder",
+    "SpatioTemporalVideoAttention",
     "TrainingConfig",
     "TransformerMultimodalFusion",
     "collate_multimodal_decision",
+    "configure_cpu_threads",
     "create_synthetic_audio",
     "create_synthetic_image",
     "generate_synthetic_dataset",
+    "get_device_telemetry",
+    "print_device_diagnostics",
+    "resolve_device",
 ]
