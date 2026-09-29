@@ -207,6 +207,8 @@ class ArbiterOmniModel(nn.Module):
             context_embed=fused_context,
             candidate_embeds=cnd_embeds,
             candidate_mask=cnd_mask,
+            modality_embeds=mod_embeds,
+            presence_mask=presence_mask,
         )
 
         return logits, probs, entropy, fused_context
@@ -235,6 +237,8 @@ class ArbiterOmniModel(nn.Module):
             context_embed=fused_context,
             candidate_embeds=candidate_embeds,
             candidate_mask=candidate_mask,
+            modality_embeds=modality_embeds,
+            presence_mask=presence_mask,
         )
 
         return logits, probs, entropy, fused_context

@@ -130,10 +130,10 @@ class ArbiterOmniEngine:
         """Loads trained fusion and decision head weights."""
         checkpoint = torch.load(weights_path, map_location=self.device)
         if "fusion" in checkpoint and "decision_head" in checkpoint:
-            self.model.fusion.load_state_dict(checkpoint["fusion"])
-            self.model.decision_head.load_state_dict(checkpoint["decision_head"])
+            self.model.fusion.load_state_dict(checkpoint["fusion"], strict=False)
+            self.model.decision_head.load_state_dict(checkpoint["decision_head"], strict=False)
         else:
-            self.model.load_state_dict(checkpoint)
+            self.model.load_state_dict(checkpoint, strict=False)
         self.model.eval()
 
     def calibrate_conformal(

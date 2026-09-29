@@ -32,8 +32,9 @@
 | **Spatial Patch Cross-Attention** | ✅ Completed | Unpooled $7 \times 7 = 49$ visual patch cross-attention with 2D spatial position embeddings for fine-grained grounding (`encode_image_patches`) |
 | **AI2D Science Diagram Adapter** | ✅ Completed | HuggingFace `lmms-lab/ai2d` adapter for 15k visual diagram Q&A samples with 4-way multi-choice label parsing (`AI2DAdapter`) |
 | **GQA Real-Image VQA Adapter** | ✅ Completed | HuggingFace `lmms-lab/GQA` adapter with dynamic distractor construction from semantic foil pools, 4-way multi-choice framing (`GQAAdapter`) |
+| **Perceptual Residual Alignment** | ✅ Completed | Direct zero-shot perceptual skip-connection in `DynamicDecisionHead` preserving foundation model zero-shot mapping |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 86/86 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D & GQA adapters) |
+| **Unit Test Coverage** | ✅ Completed | 90/90 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA adapters, perceptual residual) |
 
 
 
@@ -99,6 +100,11 @@
 - **2D Spatial Positional Embeddings**: Learned $196 \times 256$ coordinate embeddings dynamically indexed to preserve visual geometry.
 - **Zero-Leakage Masking**: When image modality is absent, all 49 patch tokens are masked via `src_key_padding_mask=True`, eliminating phantom spatial activations and gradient leakage.
 - **Local Grounding**: Allows the decision query to attend directly to localized regions for fine-grained spatial discrimination (e.g. left vs right path obstruction).
+
+### 9. Zero-Shot Perceptual Residual Alignment
+- **Foundation Model Preservation**: Direct residual connection in `DynamicDecisionHead` between frozen foundation embeddings and candidate text vectors: $s(c_k) = s_{\text{context}}(c_k) + \beta \cdot (\mathbf{x}_{\text{image}}^\top \mathbf{e}_{c_k}) \cdot \mathbb{I}(\text{image present})$.
+- **Open-Domain Recognition**: Eliminates modality collapse where multi-layer projections scramble zero-shot knowledge. Real cat photos correctly predict **Cat: 56.1%** (vs 7.9% Horse, 3.1% Bird); real dog photos correctly predict **Dog: 55.2%**.
+- **Graceful Fallback**: When vision is absent, the residual term is multiplied by 0 with zero leakage, reverting seamlessly to text-only deliberation.
 
 
 

@@ -6,10 +6,12 @@ Scores arbitrary runtime candidate decision sets and produces calibrated probabi
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from arbiter_omni.types import ModalityType
 
 
 class DynamicDecisionHead(nn.Module):
@@ -74,6 +76,9 @@ class DynamicDecisionHead(nn.Module):
             nn.Linear(64, 1),
         )
 
+        # Zero-shot perceptual residual alignment scale
+        self.visual_scale = nn.Parameter(torch.tensor(15.0, dtype=torch.float32))
+
     @property
     def temperature(self) -> float:
         return float(torch.clamp(self.log_temp.exp(), min=0.01, max=100.0).item())
@@ -83,6 +88,8 @@ class DynamicDecisionHead(nn.Module):
         context_embed: torch.Tensor,
         candidate_embeds: torch.Tensor,
         candidate_mask: Optional[torch.Tensor] = None,
+        modality_embeds: Optional[Dict[Any, torch.Tensor]] = None,
+        presence_mask: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Calculates decision logits and probability distributions over dynamic candidates.
@@ -113,6 +120,30 @@ class DynamicDecisionHead(nn.Module):
 
         # Combined scaled logits
         raw_logits = dot_scores + mlp_scores
+
+        # Direct zero-shot perceptual residual alignment (preserves foundation model zero-shot mapping)
+        if modality_embeds is not None and presence_mask is not None:
+            # Check Image modality
+            img_embed = None
+            img_present = None
+            for k in [ModalityType.IMAGE, "image", ModalityType.IMAGE.value]:
+                if k in modality_embeds:
+                    img_embed = modality_embeds[k]
+                    break
+            for k in [ModalityType.IMAGE, "image", ModalityType.IMAGE.value]:
+                if k in presence_mask:
+                    img_present = presence_mask[k]
+                    break
+
+            if img_embed is not None and img_present is not None and img_embed.shape[-1] == candidate_embeds.shape[-1]:
+                # Cosine similarity in foundation encoder space
+                vis_sim = (img_embed.unsqueeze(1) * candidate_embeds).sum(dim=-1)  # [B, K]
+                if isinstance(img_present, torch.Tensor):
+                    pres_float = img_present.float().unsqueeze(1) if img_present.ndim == 1 else img_present.float()
+                else:
+                    pres_float = torch.tensor(img_present, dtype=torch.float32, device=candidate_embeds.device).unsqueeze(1)
+                raw_logits = raw_logits + (vis_sim * self.visual_scale * pres_float)
+
         temp = torch.clamp(self.log_temp.exp(), min=0.01, max=100.0)
         scaled_logits = raw_logits / temp
 

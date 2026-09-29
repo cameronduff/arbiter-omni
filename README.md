@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-86%2F86%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-90%2F90%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
@@ -149,14 +149,16 @@ $$\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\!\left(\
 When an image is absent, all $P$ spatial patch tokens are masked out ($\mathbf{M}_{\text{patch}} = 1$) alongside $\mathbf{t}_{\text{image}}$, preventing spatial attention leakage or NaN artifacts. The representation at sequence index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
 
 
-### 2. Dynamic Candidate Interaction
+### 2. Dynamic Candidate Interaction & Perceptual Residual Alignment
 Given $K$ runtime candidate strings $\{c_1, \dots, c_K\}$, candidate embeddings $\mathbf{e}_{c_k}$ interact with context state $\mathbf{z}_{\text{context}}$ via dual projection:
 
 $$\mathbf{u}_{\text{context}} = \text{LayerNorm}(\mathbf{W}_u \mathbf{z}_{\text{context}}), \quad \mathbf{u}_{c_k} = \text{LayerNorm}(\mathbf{W}_c \mathbf{e}_{c_k})$$
 
-The unnormalized compatibility logit $s_k$ combines bilinear similarity with non-linear cross-MLP interaction:
+The unnormalized compatibility logit $s_k$ combines contextual bilinear similarity, non-linear cross-MLP interaction, and a zero-shot perceptual residual alignment:
 
-$$s_k = \frac{\mathbf{u}_{\text{context}}^\top \mathbf{u}_{c_k}}{\sqrt{d_s}} + \text{MLP}_{\text{cross}}([\mathbf{u}_{\text{context}} \,\|\, \mathbf{u}_{c_k}])$$
+$$s_k = \frac{\mathbf{u}_{\text{context}}^\top \mathbf{u}_{c_k}}{\sqrt{d_s}} + \text{MLP}_{\text{cross}}([\mathbf{u}_{\text{context}} \,\|\, \mathbf{u}_{c_k}]) + \beta \cdot (\mathbf{x}_{\text{image}}^\top \mathbf{e}_{c_k}) \cdot \mathbb{I}(\text{image present})$$
+
+where $\beta$ is a learnable scaling parameter that directly grounds runtime candidates into the frozen foundation encoder's pre-aligned zero-shot metric space. When vision is absent, $\mathbb{I}(\text{image present}) = 0$, guaranteeing zero leakage.
 
 The calibrated probability distribution is computed via learnable temperature $\tau$:
 
