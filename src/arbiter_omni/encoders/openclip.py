@@ -5,6 +5,7 @@ Encodes Text, Images, Video (via Spatio-Temporal Video Attention), and Audio (vi
 
 from __future__ import annotations
 
+import os
 from typing import Any, List, Optional, Sequence, Union
 import numpy as np
 import torch
@@ -159,31 +160,47 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
         """
         Encodes video clips by sampling frames and aggregating them using Spatio-Temporal Video Attention.
+        Supports lists of PIL images, numpy arrays, or file paths (.mp4, .webm, .gif, .avi, etc.).
         """
         batch_video_features = []
         for vid in videos:
+            frames: List[Image.Image] = []
             if isinstance(vid, (list, tuple)):
-                if len(vid) == 0:
-                    pooled = torch.zeros(self._dim, device=self.device)
-                elif len(vid) == 1:
-                    pooled = self.encode_image(vid)[0]
+                frames = list(vid)
+            elif isinstance(vid, str) and os.path.exists(vid):
+                ext = os.path.splitext(vid)[1].lower()
+                if ext in (".mp4", ".avi", ".mov", ".webm", ".mkv", ".gif"):
+                    try:
+                        import imageio.v3 as iio
+                        raw = iio.imread(vid)
+                        step = max(1, len(raw) // num_frames)
+                        frames = [Image.fromarray(raw[i]) for i in range(0, len(raw), step)[:num_frames]]
+                    except Exception:
+                        try:
+                            frames = [Image.open(vid).convert("RGB")]
+                        except Exception:
+                            frames = []
                 else:
-                    step = max(1, len(vid) // num_frames)
-                    sampled = vid[::step][:num_frames]
-                    frame_feats = self.encode_image(sampled)  # [num_frames, dim]
-                    if self.use_temporal_attention:
-                        with torch.no_grad():
-                            pooled = self.temporal_attention(frame_feats)
-                    else:
-                        pooled = frame_feats.mean(dim=0)
-            elif isinstance(vid, str):
-                try:
-                    img = Image.open(vid).convert("RGB")
-                    pooled = self.encode_image([img])[0]
-                except Exception:
-                    pooled = torch.zeros(self._dim, device=self.device)
-            else:
+                    try:
+                        frames = [Image.open(vid).convert("RGB")]
+                    except Exception:
+                        frames = []
+            elif isinstance(vid, Image.Image):
+                frames = [vid]
+
+            if len(frames) == 0:
                 pooled = torch.zeros(self._dim, device=self.device)
+            elif len(frames) == 1:
+                pooled = self.encode_image(frames)[0]
+            else:
+                step = max(1, len(frames) // num_frames)
+                sampled = frames[::step][:num_frames]
+                frame_feats = self.encode_image(sampled)  # [num_frames, dim]
+                if self.use_temporal_attention:
+                    with torch.no_grad():
+                        pooled = self.temporal_attention(frame_feats)
+                else:
+                    pooled = frame_feats.mean(dim=0)
 
             pooled = pooled / (pooled.norm(dim=-1, keepdim=True) + 1e-8)
             batch_video_features.append(pooled)

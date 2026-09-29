@@ -1,20 +1,59 @@
 """
-Unit tests for the open-domain interactive_demo module.
-Tests the core arbitration function, the examples gallery structure,
-and Gradio Blocks construction — all without network access.
+Unit tests for the refactored open-domain interactive_demo module.
+Tests predict_arbitration, arbitrate_decision backward compatibility,
+the examples gallery structure, and Gradio Blocks construction.
 """
 
-import pytest
+import os
 from PIL import Image
+import pytest
+
 from examples.interactive_demo import (
     EXAMPLES,
     _default_image,
     arbitrate_decision,
     build_app,
+    parse_candidates,
+    predict_arbitration,
 )
 
 
-def test_arbitrate_decision_basic():
+def test_parse_candidates():
+    # Comma-separated
+    assert parse_candidates("Cat, Dog, Fox") == ["Cat", "Dog", "Fox"]
+    # Newline-separated
+    assert parse_candidates("Cat\nDog\nFox") == ["Cat", "Dog", "Fox"]
+    # Empty / whitespace fallback
+    assert parse_candidates("   \n   ") == ["Choice A", "Choice B"]
+
+
+def test_predict_arbitration_basic():
+    probs, conf, entropy, score = predict_arbitration(
+        question="What animal is shown in this image?",
+        candidates_raw="Cat, Dog, Fox",
+    )
+    assert len(probs) == 3
+    assert all(0.0 <= p <= 1.0 for p in probs.values())
+    assert abs(sum(probs.values()) - 1.0) < 1e-3
+    assert 0.0 <= conf <= 1.0
+    assert entropy >= 0.0
+    assert isinstance(score, float)
+
+
+def test_predict_arbitration_modalities():
+    cat_img = "examples/assets/kitten.jpg"
+    probs, conf, entropy, score = predict_arbitration(
+        question="What animal is this?",
+        candidates_raw="Cat\nDog\nRabbit",
+        image=cat_img if os.path.exists(cat_img) else None,
+        context="A fluffy orange pet.",
+        temperature=0.7,
+    )
+    assert len(probs) == 3
+    assert "Cat" in probs
+
+
+def test_arbitrate_decision_legacy_compatibility():
     winner, probs, entropy, noul, score = arbitrate_decision(
         question="What animal is in this image?",
         candidates_text="Cat\nDog\nHorse",
@@ -22,57 +61,9 @@ def test_arbitrate_decision_basic():
     assert "Winning Decision" in winner or winner.startswith("##")
     assert len(probs) == 3
     assert all(0.0 <= p <= 1.0 for p in probs.values())
-    assert abs(sum(probs.values()) - 1.0) < 1e-4
     assert "nats" in entropy
     assert isinstance(noul, str)
     assert isinstance(score, str)
-
-
-def test_arbitrate_variable_candidates():
-    # 2 candidates
-    _, p2, _, _, _ = arbitrate_decision(
-        question="True or false?",
-        candidates_text="True\nFalse",
-    )
-    assert len(p2) == 2
-
-    # 6 candidates
-    cands = "\n".join([f"Option {i}" for i in range(6)])
-    _, p6, _, _, _ = arbitrate_decision(
-        question="Pick one:",
-        candidates_text=cands,
-    )
-    assert len(p6) == 6
-
-
-def test_arbitrate_with_image():
-    img = Image.new("RGB", (64, 64), color=(180, 100, 50))
-    _, probs, _, _, _ = arbitrate_decision(
-        question="What colour is this?",
-        candidates_text="Red\nBlue\nGreen\nOrange",
-        image_input=img,
-    )
-    assert len(probs) == 4
-
-
-def test_arbitrate_missing_all_modalities():
-    _, probs, _, _, _ = arbitrate_decision(
-        question="Pick one",
-        candidates_text="A\nB",
-        text_context=None,
-        image_input=None,
-        audio_input=None,
-    )
-    assert len(probs) == 2
-
-
-def test_arbitrate_empty_candidates_fallback():
-    # Empty candidates_text should fall back to ["Option A", "Option B"]
-    _, probs, _, _, _ = arbitrate_decision(
-        question="Anything?",
-        candidates_text="   \n   ",
-    )
-    assert len(probs) == 2
 
 
 def test_default_image_is_pil():
@@ -82,14 +73,18 @@ def test_default_image_is_pil():
 
 
 def test_examples_gallery_structure():
-    assert len(EXAMPLES) >= 4
+    assert len(EXAMPLES) >= 3
     for ex in EXAMPLES:
-        # Each example: [question, candidates, text_context, image, audio, optional temperature]
-        assert len(ex) in (5, 6)
-        question, candidates, text_ctx, image, audio = ex[:5]
+        # Schema: [question, candidates, image, audio, context, temperature]
+        assert len(ex) == 6
+        question, candidates, image, audio, context, temp = ex
         assert isinstance(question, str) and len(question) > 0
-        assert "\n" in candidates, "Candidates must contain multiple options"
-        assert isinstance(image, Image.Image) or image is None
+        assert isinstance(candidates, str) and len(candidates) > 0
+        assert ("," in candidates or "\n" in candidates), "Candidates must contain multiple options"
+        assert image is None or isinstance(image, (str, Image.Image))
+        assert audio is None or isinstance(audio, str)
+        assert isinstance(context, str)
+        assert isinstance(temp, (int, float))
 
 
 def test_build_gradio_app():

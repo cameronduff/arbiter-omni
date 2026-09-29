@@ -224,6 +224,7 @@ def run_extended_eval(
     scienceqa_samples: int = 100,
     seedbench_samples: int = 100,
     use_mock: bool = False,
+    checkpoint: Optional[str] = "checkpoints/arbiter_omni_v1.pt",
     output_json: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Runs extended real-world evaluation across ScienceQA and SEED-Bench-2."""
@@ -231,16 +232,28 @@ def run_extended_eval(
     telemetry = get_device_telemetry(device)
     logger.info(f"Initializing ArbiterOmniEngine on {telemetry['device']} ({telemetry['gpu_name']})...")
 
-    # Use OpenCLIP for realistic evaluation if available, otherwise mock
-    try:
-        encoder = OpenCLIPMultimodalEncoder(device=str(device))
-        model = ArbiterOmniModel(encoder=encoder).to(device)
-    except Exception as e:
-        logger.warning(f"Could not load OpenCLIP encoder ({e}); using MockMultimodalEncoder.")
+    if not use_mock and checkpoint and os.path.exists(checkpoint):
+        try:
+            engine = ArbiterOmniEngine.from_pretrained(checkpoint, encoder_type="openclip", device=str(device))
+            logger.info(f"Loaded pretrained production checkpoint from {checkpoint}")
+        except Exception as e:
+            logger.warning(f"Could not load checkpoint ({e}); initializing baseline model.")
+            encoder = OpenCLIPMultimodalEncoder(device=str(device))
+            model = ArbiterOmniModel(encoder=encoder).to(device)
+            engine = ArbiterOmniEngine(model=model, device=str(device))
+    elif use_mock:
         encoder = MockMultimodalEncoder()
         model = ArbiterOmniModel(encoder=encoder).to(device)
-
-    engine = ArbiterOmniEngine(model=model, device=str(device))
+        engine = ArbiterOmniEngine(model=model, device=str(device))
+    else:
+        try:
+            encoder = OpenCLIPMultimodalEncoder(device=str(device))
+            model = ArbiterOmniModel(encoder=encoder).to(device)
+        except Exception as e:
+            logger.warning(f"Could not load OpenCLIP encoder ({e}); using MockMultimodalEncoder.")
+            encoder = MockMultimodalEncoder()
+            model = ArbiterOmniModel(encoder=encoder).to(device)
+        engine = ArbiterOmniEngine(model=model, device=str(device))
 
     # 1. ScienceQA
     logger.info(f"Preparing ScienceQA ({scienceqa_samples} samples)...")
@@ -291,6 +304,7 @@ if __name__ == "__main__":
     parser.add_argument("--scienceqa-samples", type=int, default=100, help="Number of ScienceQA samples")
     parser.add_argument("--seedbench-samples", type=int, default=100, help="Number of SEED-Bench samples")
     parser.add_argument("--use-mock", action="store_true", help="Force synthetic mock samples")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/arbiter_omni_v1.pt", help="Path to pretrained model checkpoint")
     parser.add_argument("--output-json", type=str, default="benchmarks/extended_eval_results.json", help="Path to write JSON results")
 
     args = parser.parse_args()
@@ -299,6 +313,7 @@ if __name__ == "__main__":
             scienceqa_samples=args.scienceqa_samples,
             seedbench_samples=args.seedbench_samples,
             use_mock=args.use_mock,
+            checkpoint=args.checkpoint,
             output_json=args.output_json,
         )
     finally:

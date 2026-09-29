@@ -60,3 +60,19 @@ def test_temporal_sensitivity_order_dependence():
     # temporal attention with positional embeddings is strictly order-sensitive
     assert dot_sim < 0.9999, f"Temporal attention failed to distinguish reversed video sequence: {dot_sim}"
     assert not torch.allclose(out_forward, out_reversed, atol=1e-4)
+
+
+def test_video_file_decoding(tmp_path):
+    import imageio.v3 as iio
+    import numpy as np
+    from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
+
+    vid_path = str(tmp_path / "test_clip.mp4")
+    frames = [np.full((32, 32, 3), fill_value=i * 50, dtype=np.uint8) for i in range(4)]
+    iio.imwrite(vid_path, np.stack(frames), fps=4)
+
+    encoder = OpenCLIPMultimodalEncoder(device="cpu")
+    emb = encoder.encode_video([vid_path])
+    assert emb.shape == (1, encoder.video_dim)
+    assert torch.isclose(emb.norm(), torch.tensor(1.0), atol=1e-4)
+
