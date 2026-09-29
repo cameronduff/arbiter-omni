@@ -118,7 +118,7 @@ class DynamicDecisionHead(nn.Module):
 
         # Apply candidate mask if padded
         if candidate_mask is not None:
-            scaled_logits = scaled_logits.masked_fill(~candidate_mask, -1e9)
+            scaled_logits = scaled_logits.masked_fill(~candidate_mask, -10000.0)
 
         probs = F.softmax(scaled_logits, dim=-1)
 

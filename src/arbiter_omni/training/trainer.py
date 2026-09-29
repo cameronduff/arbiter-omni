@@ -18,6 +18,10 @@ from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
 )
+from arbiter_omni.data.cached import (
+    CachedMultimodalDataset,
+    collate_cached_multimodal_decision,
+)
 from arbiter_omni.device import resolve_device, get_device_telemetry
 from arbiter_omni.model.arbiter import ArbiterOmniModel
 from arbiter_omni.training.config import TrainingConfig
@@ -106,14 +110,23 @@ class ArbiterOmniTrainer:
                 dtype=self.amp_dtype,
                 enabled=self.amp_enabled,
             ):
-                logits, probs, entropy, _ = self.model(
-                    questions=batch["questions"],
-                    candidates=batch["candidates"],
-                    texts=batch["texts"],
-                    images=batch["images"],
-                    videos=batch["videos"],
-                    audios=batch["audios"],
-                )
+                if batch.get("is_cached", False):
+                    logits, probs, entropy, _ = self.model.forward_cached(
+                        question_embed=batch["question_embed"].to(self.device),
+                        modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
+                        presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
+                        candidate_embeds=batch["candidate_embeds"].to(self.device),
+                        candidate_mask=batch["candidate_mask"].to(self.device),
+                    )
+                else:
+                    logits, probs, entropy, _ = self.model(
+                        questions=batch["questions"],
+                        candidates=batch["candidates"],
+                        texts=batch["texts"],
+                        images=batch["images"],
+                        videos=batch["videos"],
+                        audios=batch["audios"],
+                    )
                 raw_loss = self.criterion(logits, targets)
                 loss = raw_loss / accum_steps
 
@@ -177,14 +190,23 @@ class ArbiterOmniTrainer:
                     dtype=self.amp_dtype,
                     enabled=self.amp_enabled,
                 ):
-                    logits, probs, entropy, _ = self.model(
-                        questions=batch["questions"],
-                        candidates=batch["candidates"],
-                        texts=batch["texts"],
-                        images=batch["images"],
-                        videos=batch["videos"],
-                        audios=batch["audios"],
-                    )
+                    if batch.get("is_cached", False):
+                        logits, probs, entropy, _ = self.model.forward_cached(
+                            question_embed=batch["question_embed"].to(self.device),
+                            modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
+                            presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
+                            candidate_embeds=batch["candidate_embeds"].to(self.device),
+                            candidate_mask=batch["candidate_mask"].to(self.device),
+                        )
+                    else:
+                        logits, probs, entropy, _ = self.model(
+                            questions=batch["questions"],
+                            candidates=batch["candidates"],
+                            texts=batch["texts"],
+                            images=batch["images"],
+                            videos=batch["videos"],
+                            audios=batch["audios"],
+                        )
 
                     loss = self.criterion(logits, targets)
 
@@ -212,23 +234,33 @@ class ArbiterOmniTrainer:
         """
         Executes end-to-end training loop for config.num_epochs.
         """
+        # Select collate_fn based on whether dataset contains pre-cached embeddings
+        is_train_cached = isinstance(train_dataset, CachedMultimodalDataset) or (
+            len(train_dataset) > 0 and hasattr(train_dataset[0], "question_embed")
+        )
+        train_collate = collate_cached_multimodal_decision if is_train_cached else collate_multimodal_decision
+
         pin_mem = self.config.pin_memory and (self.device.type == "cuda")
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
-            collate_fn=collate_multimodal_decision,
+            collate_fn=train_collate,
             pin_memory=pin_mem,
             num_workers=self.config.num_workers,
         )
 
         val_loader = None
         if val_dataset is not None:
+            is_val_cached = isinstance(val_dataset, CachedMultimodalDataset) or (
+                len(val_dataset) > 0 and hasattr(val_dataset[0], "question_embed")
+            )
+            val_collate = collate_cached_multimodal_decision if is_val_cached else collate_multimodal_decision
             val_loader = DataLoader(
                 val_dataset,
                 batch_size=self.config.batch_size,
                 shuffle=False,
-                collate_fn=collate_multimodal_decision,
+                collate_fn=val_collate,
                 pin_memory=pin_mem,
                 num_workers=self.config.num_workers,
             )

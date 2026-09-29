@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from arbiter_omni import (
     ArbiterOmniModel,
     ArbiterOmniTrainer,
+    CachedMultimodalDataset,
     MockMultimodalEncoder,
     MultimodalDecisionDataset,
     OpenCLIPMultimodalEncoder,
@@ -95,6 +96,7 @@ def train_v1(
     encoder_type: str = "openclip",
     use_mock_data: bool = False,
     device_name: str | None = None,
+    cache_embeddings: bool = True,
 ) -> str:
     """Executes the v1 checkpoint training pipeline and saves weights."""
     device = resolve_device(device_name)
@@ -137,6 +139,15 @@ def train_v1(
         use_mock_data=use_mock_data,
     )
 
+    if cache_embeddings:
+        logger.info("⚡ Pre-caching frozen representations into memory (bypassing frozen encoders during epochs)...")
+        train_dataset = CachedMultimodalDataset.from_dataset(
+            train_dataset, model=model, batch_size=batch_size, device=device
+        )
+        val_dataset = CachedMultimodalDataset.from_dataset(
+            val_dataset, model=model, batch_size=batch_size, device=device
+        )
+
     # Ensure output directory exists
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
 
@@ -171,6 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-path", type=str, default="checkpoints/arbiter_omni_v1.pt", help="Checkpoint output path")
     parser.add_argument("--encoder-type", type=str, default="openclip", choices=["openclip", "mock"], help="Encoder type")
     parser.add_argument("--use-mock-data", action="store_true", help="Use synthetic mock data instead of streaming")
+    parser.add_argument("--no-cache", action="store_true", help="Disable embedding pre-caching")
     parser.add_argument("--device", type=str, default=None, help="Compute device override")
 
     args = parser.parse_args()
@@ -183,6 +195,7 @@ if __name__ == "__main__":
             encoder_type=args.encoder_type,
             use_mock_data=args.use_mock_data,
             device_name=args.device,
+            cache_embeddings=not args.no_cache,
         )
     finally:
         os._exit(0)
