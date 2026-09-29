@@ -120,14 +120,18 @@ $$\mathbf{t}_m = \text{LayerNorm}(\mathbf{W}_m \mathbf{x}_m) + \mathbf{e}_{\text
 
 $$\mathbf{M}_j = \begin{cases} 0 & \text{if token } j \text{ is valid and present} \\ 1 & \text{if modality } j \text{ is missing (masked out)} \end{cases}$$
 
-The sequence $\mathbf{T} = [\mathbf{t}_{\text{query}}, \mathbf{t}_{\text{question}}, \mathbf{t}_{\text{text}}, \mathbf{t}_{\text{image}}, \mathbf{t}_{\text{video}}, \mathbf{t}_{\text{audio}}] \in \mathbb{R}^{6 \times d_h}$ is processed by a multi-head transformer with scaled dot-product attention:
+The full multimodal sequence is assembled into token representations:
+
+$$\mathbf{T} = \left[ \mathbf{t}_{\text{query}},\, \mathbf{t}_{\text{question}},\, \mathbf{t}_{\text{text}},\, \mathbf{t}_{\text{image}},\, \mathbf{t}_{\text{video}},\, \mathbf{t}_{\text{audio}} \right] \in \mathbb{R}^{6 \times d_h}$$
+
+and processed by a multi-head transformer with scaled dot-product attention:
 
 $$\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q} \mathbf{K}^\top}{\sqrt{d_k}} + \mathbf{M}_{\text{attn}}\right) \mathbf{V}$$
 
 The updated representation at index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
 
 ### 2. Dynamic Candidate Interaction
-Given $K$ runtime candidate strings $\{c_1, \dots, c_K\}$, candidate embeddings $\mathbf{e}_{c_k}$ interact with $\mathbf{z}_{\text{context}}$ via dual projection:
+Given $K$ runtime candidate strings $\{c_1, \dots, c_K\}$, candidate embeddings $\mathbf{e}_{c_k}$ interact with context state $\mathbf{z}_{\text{context}}$ via dual projection:
 
 $$\mathbf{u}_{\text{context}} = \text{LayerNorm}(\mathbf{W}_u \mathbf{z}_{\text{context}}), \quad \mathbf{u}_{c_k} = \text{LayerNorm}(\mathbf{W}_c \mathbf{e}_{c_k})$$
 
