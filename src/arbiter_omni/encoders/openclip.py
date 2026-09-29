@@ -1,7 +1,6 @@
 """
-OpenCLIP Multimodal Pretrained Encoder.
-Encodes Text, Images, and Video Keyframes using frozen Vision-Language Transformers.
-Includes spectral projection for Audio into the shared multimodal space.
+OpenCLIP Multimodal Pretrained Encoder with Advanced Extensions.
+Encodes Text, Images, Video (via Spatio-Temporal Video Attention), and Audio (via CLAP).
 """
 
 from __future__ import annotations
@@ -12,12 +11,15 @@ import torch
 from PIL import Image
 
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
+from arbiter_omni.encoders.clap import CLAPAudioEncoder
+from arbiter_omni.encoders.temporal import SpatioTemporalVideoAttention
 
 
 class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     """
     Multimodal encoder backed by OpenCLIP (e.g. ViT-B-32).
-    Maps text, images, video frames, and audio into a 512-dimensional joint vector space.
+    Maps text, images, video frame sequences, and audio into a 512-dimensional joint vector space.
+    Employs Spatio-Temporal Video Attention for video sequences and CLAP for audio.
     """
 
     def __init__(
@@ -25,11 +27,14 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         model_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
         device: Optional[torch.device] = None,
+        enable_clap_weights: bool = False,
+        use_temporal_attention: bool = True,
     ):
         super().__init__(device=device)
         self.model_name = model_name
         self.pretrained = pretrained
         self._dim = 512
+        self.use_temporal_attention = use_temporal_attention
 
         import open_clip
 
@@ -38,7 +43,31 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         )
         self.tokenizer = open_clip.get_tokenizer(model_name)
         self._dim = getattr(self.model, "visual", self.model).output_dim if hasattr(self.model, "visual") else 512
+
+        # Temporal Video Attention Transformer
+        self.temporal_attention = SpatioTemporalVideoAttention(
+            embed_dim=self._dim, max_frames=32, num_heads=8
+        ).to(self.device)
+
+        # CLAP Audio Encoder
+        self.audio_encoder = CLAPAudioEncoder(
+            device=self.device,
+            output_dim=self._dim,
+            load_pretrained=enable_clap_weights,
+        )
+
         self.freeze()
+
+    def freeze(self) -> OpenCLIPMultimodalEncoder:
+        """Freezes vision-text backbone, temporal attention module, and audio encoder."""
+        super().freeze()
+        if hasattr(self, "temporal_attention") and self.temporal_attention is not None:
+            self.temporal_attention.eval()
+            for p in self.temporal_attention.parameters():
+                p.requires_grad = False
+        if hasattr(self, "audio_encoder") and self.audio_encoder is not None:
+            self.audio_encoder.freeze()
+        return self
 
     @property
     def text_dim(self) -> int:
@@ -83,20 +112,26 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         return features
 
     def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
-        """Encodes video clips by sampling frames and mean-pooling frame embeddings."""
+        """
+        Encodes video clips by sampling frames and aggregating them using Spatio-Temporal Video Attention.
+        """
         batch_video_features = []
         for vid in videos:
             if isinstance(vid, (list, tuple)):
                 if len(vid) == 0:
-                    frame_feats = torch.zeros((1, self._dim), device=self.device)
+                    pooled = torch.zeros(self._dim, device=self.device)
+                elif len(vid) == 1:
+                    pooled = self.encode_image(vid)[0]
                 else:
                     step = max(1, len(vid) // num_frames)
                     sampled = vid[::step][:num_frames]
-                    frame_feats = self.encode_image(sampled)
-                pooled = frame_feats.mean(dim=0)
+                    frame_feats = self.encode_image(sampled)  # [num_frames, dim]
+                    if self.use_temporal_attention:
+                        with torch.no_grad():
+                            pooled = self.temporal_attention(frame_feats)
+                    else:
+                        pooled = frame_feats.mean(dim=0)
             elif isinstance(vid, str):
-                # Placeholder for video file path loading
-                # Loads keyframes or single image proxy
                 try:
                     img = Image.open(vid).convert("RGB")
                     pooled = self.encode_image([img])[0]
@@ -112,49 +147,6 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
 
     def encode_audio(self, audios: Sequence[Any], sample_rate: int = 16000) -> torch.Tensor:
         """
-        Embeds raw audio waveforms into the shared multimodal space
-        via spectral projection and multi-band energy pooling.
+        Embeds raw audio waveforms into the shared multimodal space using CLAP.
         """
-        results = []
-        for audio in audios:
-            if isinstance(audio, str):
-                # Audio path
-                import soundfile as sf
-                try:
-                    data, _ = sf.read(audio)
-                    audio_tensor = torch.tensor(data, dtype=torch.float32)
-                except Exception:
-                    audio_tensor = torch.zeros(16000, dtype=torch.float32)
-            elif isinstance(audio, np.ndarray):
-                audio_tensor = torch.tensor(audio, dtype=torch.float32)
-            elif isinstance(audio, torch.Tensor):
-                audio_tensor = audio.float()
-            else:
-                audio_tensor = torch.zeros(16000, dtype=torch.float32)
-
-            if audio_tensor.ndim > 1:
-                audio_tensor = audio_tensor.mean(dim=-1)
-            if audio_tensor.ndim == 1:
-                audio_tensor = audio_tensor.unsqueeze(0)
-
-            # STFT Spectral Energy
-            n_fft = 512
-            if audio_tensor.shape[-1] < n_fft:
-                audio_tensor = torch.nn.functional.pad(audio_tensor, (0, n_fft - audio_tensor.shape[-1]))
-
-            spec = torch.stft(audio_tensor, n_fft=n_fft, return_complex=True)
-            spec_mag = torch.abs(spec).mean(dim=-1).squeeze(0)  # [freq_bins]
-
-            if spec_mag.shape[-1] < self._dim:
-                padded = torch.zeros(self._dim, device=self.device)
-                padded[: spec_mag.shape[-1]] = spec_mag.to(self.device)
-                spec_mag = padded
-            elif spec_mag.shape[-1] > self._dim:
-                spec_mag = spec_mag[: self._dim].to(self.device)
-            else:
-                spec_mag = spec_mag.to(self.device)
-
-            spec_mag = spec_mag / (spec_mag.norm(dim=-1, keepdim=True) + 1e-8)
-            results.append(spec_mag)
-
-        return torch.stack(results).to(self.device)
+        return self.audio_encoder.encode_audio(audios, sample_rate=sample_rate)
