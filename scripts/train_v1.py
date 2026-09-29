@@ -1,7 +1,7 @@
 """
 ArbiterOmni Production Training Script (v1 Checkpoint).
 Trains the 2.21M trainable multimodal cross-attention fusion and dynamic decision head parameters
-across combined real-world multimodal datasets (ScienceQA, SEED-Bench-2, Robotics, Synthetic),
+across combined real-world multimodal datasets (ScienceQA, SEED-Bench-2, AI2D, GQA, Robotics, Synthetic),
 while keeping perception encoders strictly frozen.
 """
 
@@ -32,6 +32,8 @@ from arbiter_omni import (
     resolve_device,
 )
 
+from arbiter_omni.data.ai2d import load_ai2d_dataset, _make_mock_ai2d_samples
+from arbiter_omni.data.gqa import load_gqa_dataset, _make_mock_gqa_samples
 from arbiter_omni.data.robotics import generate_robotics_samples
 from arbiter_omni.data.scienceqa import load_scienceqa_dataset, create_mock_scienceqa_samples
 from arbiter_omni.data.seedbench import load_seedbench_dataset, create_mock_seedbench_samples
@@ -44,6 +46,8 @@ logger = logging.getLogger(__name__)
 def build_combined_dataset(
     scienceqa_samples: int = 100,
     seedbench_samples: int = 100,
+    ai2d_samples: int = 500,
+    gqa_samples: int = 1000,
     robotics_samples: int = 50,
     synthetic_samples: int = 50,
     use_mock_data: bool = False,
@@ -76,12 +80,39 @@ def build_combined_dataset(
         )
     samples.extend([s for s in seed if s.target_idx is not None])
 
-    # 3. Robotics Action Decisions
+    # 3. AI2D — Science Diagrams (image-grounded visual Q&A, 4-way multi-choice)
+    logger.info(f"Gathering AI2D diagram samples ({ai2d_samples})...")
+    if use_mock_data:
+        ai2d = _make_mock_ai2d_samples(num_samples=ai2d_samples)
+    else:
+        ai2d = load_ai2d_dataset(
+            split="train",
+            max_samples=ai2d_samples,
+            streaming=True,
+            use_mock_fallback=True,
+        )
+    samples.extend([s for s in ai2d if s.target_idx is not None])
+
+    # 4. GQA — Compositional Real-Image VQA (open-ended → dynamic 4-way choice)
+    logger.info(f"Gathering GQA samples ({gqa_samples})...")
+    if use_mock_data:
+        gqa = _make_mock_gqa_samples(num_samples=gqa_samples)
+    else:
+        gqa = load_gqa_dataset(
+            split="train_balanced",
+            max_samples=gqa_samples,
+            streaming=True,
+            num_distractors=3,
+            use_mock_fallback=True,
+        )
+    samples.extend([s for s in gqa if s.target_idx is not None])
+
+    # 5. Robotics Action Decisions
     logger.info(f"Gathering Robotics Action samples ({robotics_samples})...")
     robotics = generate_robotics_samples(num_samples=robotics_samples)
     samples.extend([s for s in robotics if s.target_idx is not None])
 
-    # 4. Multi-Domain Synthetic Sensor Cases
+    # 6. Multi-Domain Synthetic Sensor Cases
     logger.info(f"Gathering Synthetic Multi-Modal samples ({synthetic_samples})...")
     synth = generate_synthetic_dataset(num_samples=synthetic_samples, missing_modality_prob=0.3)
     samples.extend([s for s in synth if s.target_idx is not None])
@@ -102,6 +133,10 @@ def train_v1(
     contrastive_lambda: float = 0.2,
     margin_gamma: float = 0.5,
     mine_hard_negatives: bool = False,
+    scienceqa_samples: int = 2000,
+    ai2d_samples: int = 500,
+    gqa_samples: int = 2000,
+    seedbench_samples: int = 100,
 ) -> str:
     """Executes the v1 checkpoint training pipeline and saves weights."""
     device = resolve_device(device_name)
@@ -128,17 +163,37 @@ def train_v1(
     logger.info(f"Frozen Perception Params: {frozen_count:,} (0.00% gradient updates)")
     logger.info(f"Trainable Fusion & Decision Params: {trainable_count:,}")
 
-    # Build dataset
+    # --- Build expanded corpus ---
+    # 80/20 split: 80% train, 20% val
+    train_sqa = max(1, int(scienceqa_samples * 0.8))
+    val_sqa   = max(1, scienceqa_samples - train_sqa)
+    train_ai2d = max(1, int(ai2d_samples * 0.8))
+    val_ai2d   = max(1, ai2d_samples - train_ai2d)
+    train_gqa  = max(1, int(gqa_samples * 0.8))
+    val_gqa    = max(1, gqa_samples - train_gqa)
+    train_seed = max(1, int(seedbench_samples * 0.8))
+    val_seed   = max(1, seedbench_samples - train_seed)
+
+    logger.info(
+        f"Corpus split — Train: ScienceQA={train_sqa}, AI2D={train_ai2d}, "
+        f"GQA={train_gqa}, SEED={train_seed} | "
+        f"Val: ScienceQA={val_sqa}, AI2D={val_ai2d}, GQA={val_gqa}, SEED={val_seed}"
+    )
+
     train_dataset = build_combined_dataset(
-        scienceqa_samples=80,
-        seedbench_samples=80,
+        scienceqa_samples=train_sqa,
+        seedbench_samples=train_seed,
+        ai2d_samples=train_ai2d,
+        gqa_samples=train_gqa,
         robotics_samples=40,
         synthetic_samples=40,
         use_mock_data=use_mock_data,
     )
     val_dataset = build_combined_dataset(
-        scienceqa_samples=20,
-        seedbench_samples=20,
+        scienceqa_samples=val_sqa,
+        seedbench_samples=val_seed,
+        ai2d_samples=val_ai2d,
+        gqa_samples=val_gqa,
         robotics_samples=10,
         synthetic_samples=10,
         use_mock_data=use_mock_data,
@@ -201,6 +256,10 @@ if __name__ == "__main__":
     parser.add_argument("--margin-gamma", type=float, default=0.5, help="Margin gamma for contrastive loss")
     parser.add_argument("--mine-hard-negatives", action="store_true", help="Mine hard negative candidate foils")
     parser.add_argument("--device", type=str, default=None, help="Compute device override")
+    parser.add_argument("--scienceqa-samples", type=int, default=2000, help="Total ScienceQA samples (train+val)")
+    parser.add_argument("--ai2d-samples", type=int, default=500, help="Total AI2D samples (train+val)")
+    parser.add_argument("--gqa-samples", type=int, default=2000, help="Total GQA samples (train+val)")
+    parser.add_argument("--seedbench-samples", type=int, default=100, help="Total SEED-Bench-2 samples (train+val)")
 
     args = parser.parse_args()
     try:
@@ -216,6 +275,10 @@ if __name__ == "__main__":
             contrastive_lambda=args.contrastive_lambda,
             margin_gamma=args.margin_gamma,
             mine_hard_negatives=args.mine_hard_negatives,
+            scienceqa_samples=args.scienceqa_samples,
+            ai2d_samples=args.ai2d_samples,
+            gqa_samples=args.gqa_samples,
+            seedbench_samples=args.seedbench_samples,
         )
     finally:
         os._exit(0)
