@@ -115,6 +115,15 @@ def get_device_telemetry(device: Optional[torch.device] = None) -> Dict[str, Any
         info["total_vram_mb"] = round(props.total_memory / (1024**2), 1)
         info["allocated_vram_mb"] = round(torch.cuda.memory_allocated(0) / (1024**2), 1)
         info["reserved_vram_mb"] = round(torch.cuda.memory_reserved(0) / (1024**2), 1)
+    elif dml_active and dev.type == "privateuseone":
+        try:
+            import torch_directml
+            info["gpu_name"] = torch_directml.device_name(0)
+        except Exception:
+            info["gpu_name"] = "DirectML GPU"
+        info["total_vram_mb"] = 8192.0  # RX 480 8GB
+        info["allocated_vram_mb"] = None
+        info["reserved_vram_mb"] = None
     else:
         info["gpu_name"] = "CPU / Emulated"
         info["total_vram_mb"] = None
@@ -140,7 +149,8 @@ def print_device_diagnostics() -> None:
 
     if telemetry["total_vram_mb"] is not None:
         print(f" Dedicated VRAM          : {telemetry['total_vram_mb']:,.1f} MB")
-        print(f" Current Allocated VRAM  : {telemetry['allocated_vram_mb']:,.1f} MB")
+        if telemetry.get("allocated_vram_mb") is not None:
+            print(f" Current Allocated VRAM  : {telemetry['allocated_vram_mb']:,.1f} MB")
     else:
         print(" Dedicated VRAM          : N/A (Host RAM / Shared Memory)")
     print("=" * 70)

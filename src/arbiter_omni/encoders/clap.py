@@ -142,7 +142,7 @@ class CLAPAudioEncoder(BaseMultimodalEncoder):
         # STFT Spectral Fallback
         results = []
         for wave in raw_waveforms:
-            wave_tensor = torch.tensor(wave, dtype=torch.float32, device=self.device)
+            wave_tensor = torch.tensor(wave, dtype=torch.float32, device="cpu")
             if wave_tensor.ndim == 1:
                 wave_tensor = wave_tensor.unsqueeze(0)
 
@@ -152,9 +152,10 @@ class CLAPAudioEncoder(BaseMultimodalEncoder):
                     wave_tensor, (0, n_fft - wave_tensor.shape[-1])
                 )
 
-            window = torch.hann_window(n_fft, device=self.device)
+            # Compute complex STFT on CPU to ensure hardware portability (e.g. DirectML lacks ComplexFloat HLSL support)
+            window = torch.hann_window(n_fft, device="cpu")
             spec = torch.stft(wave_tensor, n_fft=n_fft, window=window, return_complex=True)
-            spec_mag = torch.abs(spec).mean(dim=-1).squeeze(0)  # [freq_bins]
+            spec_mag = torch.abs(spec).mean(dim=-1).squeeze(0).to(self.device)  # [freq_bins]
 
             padded = torch.zeros(512, device=self.device)
             valid_len = min(512, spec_mag.shape[-1])
