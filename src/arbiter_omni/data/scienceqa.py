@@ -118,16 +118,20 @@ def load_scienceqa_dataset(
     split: str = "validation",
     max_samples: Optional[int] = 500,
     only_multimodal: bool = True,
+    streaming: bool = True,
     use_mock_fallback: bool = True,
 ) -> List[MultimodalSample]:
     """
-    Loads ScienceQA samples from HuggingFace datasets or falls back to mock samples if offline.
+    Loads ScienceQA samples from HuggingFace datasets (derek-thomas/ScienceQA) or falls back to mock samples if offline.
+    Supports streaming to avoid downloading massive local archives.
     """
     try:
         from datasets import load_dataset  # type: ignore
 
-        logger.info(f"Loading ScienceQA split='{split}' from HuggingFace...")
-        ds = load_dataset("allenai/science_qa", split=split)
+        logger.info(
+            f"Loading ScienceQA split='{split}' (streaming={streaming}) from HuggingFace derek-thomas/ScienceQA..."
+        )
+        ds = load_dataset("derek-thomas/ScienceQA", split=split, streaming=streaming)
         samples: List[MultimodalSample] = []
 
         for record in ds:
@@ -140,7 +144,7 @@ def load_scienceqa_dataset(
             if max_samples is not None and len(samples) >= max_samples:
                 break
 
-        logger.info(f"Successfully loaded {len(samples)} ScienceQA samples.")
+        logger.info(f"Successfully loaded {len(samples)} real ScienceQA samples.")
         return samples
     except Exception as e:
         if use_mock_fallback:
