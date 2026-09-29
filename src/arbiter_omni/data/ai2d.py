@@ -55,15 +55,23 @@ class AI2DAdapter:
         if not candidates:
             candidates = ["Option A", "Option B", "Option C", "Option D"]
 
-        # Resolve target index from answer letter
-        target_idx: Optional[int] = _LETTER_TO_IDX.get(answer)
+        # Resolve target index from answer (can be int, digit string '1', letter 'B', or option text)
+        target_idx: Optional[int] = None
+        if isinstance(answer, int):
+            target_idx = answer
+        elif str(answer).isdigit():
+            target_idx = int(answer)
+        else:
+            target_idx = _LETTER_TO_IDX.get(answer)
+
         if target_idx is None:
             # Sometimes answer is a full string matching one of the options
             for i, c in enumerate(candidates):
-                if answer.strip().lower() == c.strip().lower():
+                if str(answer).strip().lower() == c.strip().lower():
                     target_idx = i
                     break
-        if target_idx is not None and target_idx >= len(candidates):
+
+        if target_idx is not None and (target_idx < 0 or target_idx >= len(candidates)):
             target_idx = None
 
         return MultimodalSample(
@@ -118,16 +126,17 @@ def _make_mock_ai2d_samples(num_samples: int = 10, seed: int = 0) -> List[Multim
 
 
 def load_ai2d_dataset(
-    split: str = "train",
+    split: str = "test",
     max_samples: Optional[int] = 5000,
     streaming: bool = True,
     use_mock_fallback: bool = True,
 ) -> List[MultimodalSample]:
     """
     Loads AI2D samples from HuggingFace `lmms-lab/ai2d`.
+    Note: lmms-lab/ai2d hosts all ~15k samples under the 'test' split.
 
     Args:
-        split:            HuggingFace split name — "train" (all ~15k) or "test".
+        split:            HuggingFace split name (defaults to 'test'; 'train' automatically maps to 'test').
         max_samples:      Cap on number of loaded samples (None = unlimited).
         streaming:        Use streaming mode to avoid large local downloads.
         use_mock_fallback: Fall back to synthetic mock samples if download fails.
@@ -138,8 +147,10 @@ def load_ai2d_dataset(
     try:
         from datasets import load_dataset  # type: ignore
 
-        logger.info(f"Loading AI2D split='{split}' (streaming={streaming}) from lmms-lab/ai2d...")
-        ds = load_dataset("lmms-lab/ai2d", split=split, streaming=streaming)
+        # Map train/val to test split if requested, as lmms-lab/ai2d only defines 'test'
+        hf_split = "test" if split in ("train", "val", "validation") else split
+        logger.info(f"Loading AI2D split='{hf_split}' (requested '{split}', streaming={streaming}) from lmms-lab/ai2d...")
+        ds = load_dataset("lmms-lab/ai2d", split=hf_split, streaming=streaming)
 
         samples: List[MultimodalSample] = []
         adapter = AI2DAdapter()

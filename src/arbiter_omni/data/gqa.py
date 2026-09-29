@@ -105,7 +105,8 @@ class GQAAdapter:
     def record_to_sample(self, record: Dict[str, Any]) -> MultimodalSample:
         """Converts a single GQA record into a MultimodalSample."""
         question = str(record.get("question", "")).strip()
-        answer = str(record.get("answer", "")).strip().lower()
+        raw_ans = record.get("answer") or record.get("multiple_choice_answer") or ""
+        answer = str(raw_ans).strip().lower()
         image = record.get("image", None)
         qid = str(record.get("question_id", ""))
 
@@ -184,15 +185,23 @@ def load_gqa_dataset(
     try:
         from datasets import load_dataset  # type: ignore
 
-        logger.info(f"Loading GQA split='{split}' (streaming={streaming}) from lmms-lab/GQA...")
-        ds = load_dataset("lmms-lab/GQA", split=split, streaming=streaming)
+        is_val = any(k in str(split).lower() for k in ("val", "test", "dev"))
+        config_name = "val_balanced_instructions" if is_val else "train_balanced_instructions"
+        split_name = "val" if is_val else "train"
+
+        logger.info(f"Loading GQA config='{config_name}', split='{split_name}' (streaming={streaming}) from lmms-lab/GQA...")
+        ds = load_dataset("lmms-lab/GQA", config_name, split=split_name, streaming=streaming)
 
         adapter = GQAAdapter(num_distractors=num_distractors, seed=seed)
         samples: List[MultimodalSample] = []
         try:
             for record in ds:
                 sample = adapter.record_to_sample(record)
-                if sample is not None and sample.target_idx is not None and len(sample.candidates) >= 2:
+                if (
+                    sample is not None
+                    and sample.target_idx is not None
+                    and len(sample.candidates) >= 2
+                ):
                     samples.append(sample)
                 if max_samples is not None and len(samples) >= max_samples:
                     break

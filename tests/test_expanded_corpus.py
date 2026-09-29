@@ -61,6 +61,18 @@ class TestAI2DAdapter:
         assert sample.target_idx == 1  # "B" → index 1
         assert sample.image is img
 
+    def test_adapter_record_numeric_answer(self):
+        adapter = AI2DAdapter()
+        record = {
+            "question": "What is shown?",
+            "options": ["apple", "banana", "orange"],
+            "answer": 1,
+            "image": None,
+        }
+        sample = adapter.record_to_sample(record)
+        assert sample.target_idx == 1
+        assert sample.candidates[sample.target_idx] == "banana"
+
     def test_adapter_record_strips_letter_prefix(self):
         adapter = AI2DAdapter()
         record = {
@@ -141,6 +153,19 @@ class TestGQAAdapter:
         assert "red" in sample.candidates
         assert sample.candidates[sample.target_idx] == "red"
         assert sample.image is img
+
+    def test_adapter_record_multiple_choice_answer(self):
+        adapter = GQAAdapter(seed=0)
+        record = {
+            "question": "Where is he?",
+            "multiple_choice_answer": "inside",
+            "image": None,
+            "question_id": "vqa_1",
+        }
+        sample = adapter.record_to_sample(record)
+        assert sample is not None
+        assert "inside" in sample.candidates
+        assert sample.candidates[sample.target_idx] == "inside"
 
     def test_adapter_skips_empty_answer(self):
         adapter = GQAAdapter(seed=0)
