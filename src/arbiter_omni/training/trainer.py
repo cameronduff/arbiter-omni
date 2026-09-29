@@ -2,11 +2,13 @@
 ArbiterOmni Modular Training Pipeline.
 Trains only the lightweight fusion network and decision head while keeping
 multimodal encoders frozen.
+Supports GPU batch scaling, mixed precision (FP16/AMP), and throughput telemetry.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 import torch
 import torch.nn as nn
@@ -16,6 +18,7 @@ from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
 )
+from arbiter_omni.device import resolve_device, get_device_telemetry
 from arbiter_omni.model.arbiter import ArbiterOmniModel
 from arbiter_omni.training.config import TrainingConfig
 
@@ -27,7 +30,8 @@ class ArbiterOmniTrainer:
     Lightweight Trainer for ArbiterOmni.
     
     Verifies encoder parameter freezing, executes dynamic-batch cross-entropy training,
-    and tracks calibration metrics (entropy, temperature, accuracy).
+    tracks calibration metrics (entropy, temperature, accuracy), and accelerates
+    execution via PyTorch AMP mixed precision and gradient accumulation.
     """
 
     def __init__(
@@ -38,12 +42,8 @@ class ArbiterOmniTrainer:
         self.model = model
         self.config = config or TrainingConfig()
 
-        # Resolve compute device (CPU / CUDA / ROCm)
-        if self.config.device:
-            self.device = torch.device(self.config.device)
-        else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        # Resolve compute device (CPU / CUDA / ROCm / DirectML)
+        self.device = resolve_device(self.config.device)
         self.model.to(self.device)
 
         # Enforce that encoder parameters are frozen
@@ -69,8 +69,19 @@ class ArbiterOmniTrainer:
             label_smoothing=self.config.label_smoothing
         )
 
+        # Setup AMP Mixed Precision
+        use_amp = self.config.fp16 and (self.device.type in ("cuda", "cpu"))
+        self.amp_device_type = "cuda" if self.device.type == "cuda" else "cpu"
+        self.amp_dtype = torch.float16 if self.device.type == "cuda" else torch.bfloat16
+        self.amp_enabled = use_amp
+        
+        # GradScaler only applies to CUDA
+        self.scaler = torch.amp.GradScaler(
+            "cuda", enabled=(self.config.fp16 and self.device.type == "cuda")
+        )
+
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
-        """Runs a single training epoch."""
+        """Runs a single training epoch with mixed precision and gradient accumulation."""
         self.model.train()
         self.model.encoder.eval()  # Keep encoder in eval mode (dropout/layernorm frozen)
 
@@ -78,6 +89,10 @@ class ArbiterOmniTrainer:
         correct = 0
         total_samples = 0
         total_entropy = 0.0
+        accum_steps = max(1, self.config.accumulate_grad_batches)
+
+        start_time = time.perf_counter()
+        self.optimizer.zero_grad()
 
         for batch_idx, batch in enumerate(dataloader):
             targets = batch["targets"]
@@ -85,44 +100,60 @@ class ArbiterOmniTrainer:
                 continue
 
             targets = targets.to(self.device)
-            self.optimizer.zero_grad()
 
-            logits, probs, entropy, _ = self.model(
-                questions=batch["questions"],
-                candidates=batch["candidates"],
-                texts=batch["texts"],
-                images=batch["images"],
-                videos=batch["videos"],
-                audios=batch["audios"],
-            )
-
-            loss = self.criterion(logits, targets)
-            loss.backward()
-
-            if self.config.grad_clip > 0:
-                nn.utils.clip_grad_norm_(
-                    self.model.trainable_parameters(), self.config.grad_clip
+            with torch.amp.autocast(
+                device_type=self.amp_device_type,
+                dtype=self.amp_dtype,
+                enabled=self.amp_enabled,
+            ):
+                logits, probs, entropy, _ = self.model(
+                    questions=batch["questions"],
+                    candidates=batch["candidates"],
+                    texts=batch["texts"],
+                    images=batch["images"],
+                    videos=batch["videos"],
+                    audios=batch["audios"],
                 )
+                raw_loss = self.criterion(logits, targets)
+                loss = raw_loss / accum_steps
 
-            self.optimizer.step()
+            self.scaler.scale(loss).backward()
+
+            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(dataloader):
+                if self.config.grad_clip > 0:
+                    self.scaler.unscale_(self.optimizer)
+                    nn.utils.clip_grad_norm_(
+                        self.model.trainable_parameters(), self.config.grad_clip
+                    )
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.optimizer.zero_grad()
 
             # Metrics
             preds = torch.argmax(probs, dim=-1)
             correct += int((preds == targets).sum().item())
             total_samples += len(targets)
-            total_loss += float(loss.item()) * len(targets)
+            total_loss += float(raw_loss.item()) * len(targets)
             total_entropy += float(entropy.sum().item())
 
+        elapsed = max(1e-5, time.perf_counter() - start_time)
         avg_loss = total_loss / max(1, total_samples)
         accuracy = correct / max(1, total_samples)
         avg_entropy = total_entropy / max(1, total_samples)
+        samples_per_sec = total_samples / elapsed
 
-        return {
+        metrics = {
             "loss": avg_loss,
             "accuracy": accuracy,
             "entropy": avg_entropy,
             "temperature": self.model.decision_head.temperature,
+            "samples_per_sec": samples_per_sec,
         }
+
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            metrics["peak_vram_mb"] = torch.cuda.max_memory_allocated(self.device) / (1024**2)
+
+        return metrics
 
     def evaluate(self, dataloader: DataLoader) -> Dict[str, float]:
         """Evaluates model performance on validation data."""
@@ -141,18 +172,23 @@ class ArbiterOmniTrainer:
 
                 targets = targets.to(self.device)
 
-                logits, probs, entropy, _ = self.model(
-                    questions=batch["questions"],
-                    candidates=batch["candidates"],
-                    texts=batch["texts"],
-                    images=batch["images"],
-                    videos=batch["videos"],
-                    audios=batch["audios"],
-                )
+                with torch.amp.autocast(
+                    device_type=self.amp_device_type,
+                    dtype=self.amp_dtype,
+                    enabled=self.amp_enabled,
+                ):
+                    logits, probs, entropy, _ = self.model(
+                        questions=batch["questions"],
+                        candidates=batch["candidates"],
+                        texts=batch["texts"],
+                        images=batch["images"],
+                        videos=batch["videos"],
+                        audios=batch["audios"],
+                    )
 
-                loss = self.criterion(logits, targets)
+                    loss = self.criterion(logits, targets)
+
                 preds = torch.argmax(probs, dim=-1)
-
                 correct += int((preds == targets).sum().item())
                 total_samples += len(targets)
                 total_loss += float(loss.item()) * len(targets)
@@ -176,11 +212,14 @@ class ArbiterOmniTrainer:
         """
         Executes end-to-end training loop for config.num_epochs.
         """
+        pin_mem = self.config.pin_memory and (self.device.type == "cuda")
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=collate_multimodal_decision,
+            pin_memory=pin_mem,
+            num_workers=self.config.num_workers,
         )
 
         val_loader = None
@@ -190,6 +229,8 @@ class ArbiterOmniTrainer:
                 batch_size=self.config.batch_size,
                 shuffle=False,
                 collate_fn=collate_multimodal_decision,
+                pin_memory=pin_mem,
+                num_workers=self.config.num_workers,
             )
 
         history: Dict[str, List[float]] = {
@@ -213,12 +254,13 @@ class ArbiterOmniTrainer:
                 history["val_accuracy"].append(val_metrics["val_accuracy"])
                 val_str = f" | Val Loss: {val_metrics['val_loss']:.4f} | Val Acc: {val_metrics['val_accuracy']*100:.1f}%"
 
+            speed_str = f"{train_metrics.get('samples_per_sec', 0.0):.1f} samples/s"
             logger.info(
                 f"Epoch {epoch:02d}/{self.config.num_epochs:02d} | "
                 f"Loss: {train_metrics['loss']:.4f} | "
                 f"Acc: {train_metrics['accuracy']*100:.1f}% | "
                 f"Entropy: {train_metrics['entropy']:.3f} | "
-                f"Temp: {train_metrics['temperature']:.2f}{val_str}"
+                f"Speed: {speed_str}{val_str}"
             )
 
         if self.config.save_path:
