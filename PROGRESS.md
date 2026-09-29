@@ -30,12 +30,12 @@
 | **Hard-Negative Candidate Mining** | ✅ Completed | `HardNegativeMiner` semantic cosine similarity nearest-neighbor foils & contrastive margin ranking loss $\mathcal{L}_{\text{margin}}$ |
 | **Conformal Prediction & System 2 Gate** | ✅ Completed | Split conformal calibration ($(1 - \alpha)$ coverage guarantees) + `System2EscalationGate` automated ambiguity trigger |
 | **Spatial Patch Cross-Attention** | ✅ Completed | Unpooled $7 \times 7 = 49$ visual patch cross-attention with 2D spatial position embeddings for fine-grained grounding (`encode_image_patches`) |
-| **AI2D Science Diagram Adapter** | ✅ Completed | HuggingFace `lmms-lab/ai2d` adapter for 15k visual diagram Q&A samples with 4-way multi-choice label parsing (`AI2DAdapter`) |
-| **GQA Real-Image VQA Adapter** | ✅ Completed | HuggingFace `lmms-lab/GQA` adapter with dynamic distractor construction from semantic foil pools, 4-way multi-choice framing (`GQAAdapter`) |
+| **AI2D Science Diagram Adapter** | ✅ Completed | HuggingFace `lmms-lab/ai2d` streaming adapter (15k diagram Q&A, numeric & letter answer resolution, split mapping) (`AI2DAdapter`) |
+| **GQA Real-Image VQA Adapter** | ✅ Completed | HuggingFace `lmms-lab/GQA` streaming adapter (multi-choice answer mapping, semantic foil pools, balanced instructions) (`GQAAdapter`) |
 | **Perceptual Residual Alignment** | ✅ Completed | Direct zero-shot perceptual skip-connection in `DynamicDecisionHead` preserving foundation model zero-shot mapping |
 | **Candidate Prompt Template Ensembling** | ✅ Completed | `DEFAULT_PROMPT_TEMPLATES` multi-template candidate ensembling in `encode_candidates` & `engine.decide` (+23.8% confidence boost) |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 94/94 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA adapters, perceptual residual, prompt ensembling) |
+| **Unit Test Coverage** | ✅ Completed | 96/96 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling) |
 
 
 
