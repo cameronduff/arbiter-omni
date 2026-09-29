@@ -6,6 +6,7 @@ Inspired by Jev System 1 Decision Architecture.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Union
+import os
 import torch
 import torch.nn.functional as F
 
@@ -77,6 +78,46 @@ class ArbiterOmniEngine:
             scoring_dim=scoring_dim,
         )
         return cls(model=model, device=dev)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        checkpoint_name_or_path: str = "v1",
+        encoder_type: str = "openclip",
+        device: Optional[Union[str, torch.device]] = None,
+        **kwargs,
+    ) -> ArbiterOmniEngine:
+        """
+        Loads an ArbiterOmniEngine instance initialized with pretrained weights.
+
+        Args:
+            checkpoint_name_or_path: Checkpoint tag ('v1') or filepath to .pt checkpoint.
+            encoder_type: 'openclip' or 'mock'.
+            device: Target torch device or device string.
+        """
+        dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        path = checkpoint_name_or_path
+        if path == "v1":
+            candidates = [
+                "checkpoints/arbiter_omni_v1.pt",
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "checkpoints", "arbiter_omni_v1.pt"),
+                os.path.join(os.getcwd(), "checkpoints", "arbiter_omni_v1.pt"),
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    path = cand
+                    break
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Checkpoint '{checkpoint_name_or_path}' could not be resolved at path: {path}. "
+                "Ensure checkpoints/arbiter_omni_v1.pt exists or run scripts/train_v1.py."
+            )
+
+        engine = cls.create(encoder_type=encoder_type, device=dev, **kwargs)
+        engine.load_weights(path)
+        return engine
 
     def load_weights(self, weights_path: str):
         """Loads trained fusion and decision head weights."""

@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-12%2F12%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-44%2F44%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
@@ -166,6 +166,30 @@ uv sync
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
+
+### 0. Loading Pretrained Weights (`v1` Checkpoint)
+
+ArbiterOmni provides official pretrained fusion and dynamic decision weights trained across ScienceQA, SEED-Bench-2, and Open X-Embodiment robotics actions:
+
+```python
+from arbiter_omni import ArbiterOmniEngine
+from PIL import Image
+
+# Load production v1 model with OpenCLIP perception
+engine = ArbiterOmniEngine.from_pretrained("v1", encoder_type="openclip")
+
+# Or train your own checkpoint:
+# uv run python scripts/train_v1.py --epochs 3 --batch-size 32
+```
+
+### Interactive Web UI (Playground)
+
+Launch the real-time decision playground with live entropy gauges and Jev Boolean Noul certainty:
+
+```bash
+uv run python examples/interactive_demo.py
+# Navigate to http://localhost:7860
 ```
 
 ### 1. Minimal Inference (Single Call)
