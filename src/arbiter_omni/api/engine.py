@@ -10,6 +10,7 @@ import os
 import torch
 import torch.nn.functional as F
 
+from arbiter_omni.calibration.conformal import ConformalCalibrator, System2EscalationGate
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
 from arbiter_omni.encoders.mock import MockMultimodalEncoder
 from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
@@ -17,6 +18,7 @@ from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.model.arbiter import ArbiterOmniModel
 from arbiter_omni.model.decision_head import DynamicDecisionHead
 from arbiter_omni.types import DecisionResult, ModalityType, MultimodalSample
+
 
 
 class ArbiterOmniEngine:
@@ -39,6 +41,11 @@ class ArbiterOmniEngine:
 
         self.model = model.to(self.device)
         self.model.eval()
+
+        # Calibration & System 2 Escalation Gate
+        self.conformal_calibrator = ConformalCalibrator()
+        self.escalation_gate = System2EscalationGate()
+
 
     @classmethod
     def create(
@@ -129,7 +136,66 @@ class ArbiterOmniEngine:
             self.model.load_state_dict(checkpoint)
         self.model.eval()
 
+    def calibrate_conformal(
+        self,
+        samples: Sequence[MultimodalSample],
+        alpha: float = 0.05,
+        method: str = "lac",
+    ) -> float:
+        """
+        Calibrates finite-sample (1 - alpha) conformal prediction sets using held-out samples.
+
+        Args:
+            samples: Calibration dataset containing MultimodalSample instances with target_idx.
+            alpha: Significance level (default 0.05 for 95% statistical coverage guarantee).
+            method: 'lac' (Least Ambiguous Classifier) or 'aps' (Adaptive Prediction Sets).
+
+        Returns:
+            q_hat: Calibrated non-conformity threshold quantile.
+        """
+        self.conformal_calibrator = ConformalCalibrator(alpha=alpha, method=method)
+        results = self.decide_batch(samples)
+        
+        valid_probs = []
+        targets = []
+        cand_lists = []
+        for s, r in zip(samples, results):
+            if s.target_idx is not None:
+                valid_probs.append(r.probabilities)
+                targets.append(s.target_idx)
+                cand_lists.append(s.candidates)
+
+        return self.conformal_calibrator.calibrate(
+            probabilities=valid_probs,
+            targets=targets,
+            candidate_lists=cand_lists,
+        )
+
+    def configure_escalation_gate(
+        self,
+        entropy_threshold: float = 0.95,
+        max_conformal_size: int = 1,
+        min_confidence: float = 0.50,
+        enabled: bool = True,
+    ):
+        """
+        Configures criteria for escalating ambiguous System 1 decisions to System 2.
+
+        Args:
+            entropy_threshold: Max permissible Shannon entropy before escalation (default 0.95 nats).
+            max_conformal_size: Max permissible conformal prediction set size (default 1 candidate).
+            min_confidence: Minimum top-1 confidence required before escalation (default 0.50).
+            enabled: Whether the escalation gate is actively monitored.
+        """
+        self.escalation_gate = System2EscalationGate(
+            entropy_threshold=entropy_threshold,
+            max_conformal_size=max_conformal_size,
+            min_confidence=min_confidence,
+            enabled=enabled,
+        )
+
     def decide(
+
         self,
         question: str,
         candidates: Sequence[str],
@@ -199,6 +265,14 @@ class ArbiterOmniEngine:
             "calibrated_certainty": abs(noul_cert - 0.5) * 2.0,
         }
 
+        # Conformal prediction set & System 2 escalation check
+        conformal_set = self.conformal_calibrator.predict_set(prob_dict)
+        escalate, reason = self.escalation_gate.evaluate(
+            confidence=confidence,
+            entropy=ent,
+            conformal_set=conformal_set,
+        )
+
         return DecisionResult(
             question=question,
             winner=winner,
@@ -210,7 +284,11 @@ class ArbiterOmniEngine:
             boolean_noul=boolean_noul,
             score=cont_score,
             latent_embedding=fused_vec,
+            conformal_set=conformal_set,
+            escalate_system2=escalate,
+            escalation_reason=reason,
         )
+
 
     def decide_batch(
         self,
