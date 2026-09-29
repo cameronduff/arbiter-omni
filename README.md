@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-48%2F48%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-51%2F51%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
@@ -183,14 +183,19 @@ engine = ArbiterOmniEngine.from_pretrained("v1", encoder_type="openclip")
 # uv run python scripts/train_v1.py --epochs 3 --batch-size 32
 ```
 
-### Interactive Web UI (Playground)
+### Interactive Web UI (Open-Domain Playground)
 
-Launch the real-time decision playground with live entropy gauges and Jev Boolean Noul certainty:
+Launch the real-time, general-purpose decision playground with live probability distributions, single-pass latency profiling, Shannon entropy gauges, and Jev Boolean Noul certainty:
 
 ```bash
 uv run python examples/interactive_demo.py
 # Navigate to http://localhost:7860
 ```
+
+- **Zero Class Hardcoding**: Enter arbitrary candidate choices on-the-fly (2 to $N$ lines).
+- **Pre-populated Out-of-the-Box**: The interface loads with ready-to-run multimodal inputs; click **"⚡ Arbitrate Decision"** immediately.
+- **1-Click General Scenarios (`gr.Examples`)**: Includes scientific deduction, cross-modal audio-visual events, truth/safety verification, priority scoring, and multi-foil ambiguity.
+- **Missing Modality Testing**: Freely clear the image or audio components to test zero-leakage multimodal degradation.
 
 ### 1. Minimal Inference (Single Call)
 

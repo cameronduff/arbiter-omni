@@ -22,12 +22,12 @@
 | **ScienceQA Adapter (Live Streaming)** | ✅ Completed | Live HTTP streaming from `derek-thomas/ScienceQA` for real held-out multimodal questions (`ScienceQAAdapter`) |
 | **SEED-Bench-2 Adapter** | ✅ Completed | Multi-choice dynamic candidate adapter supporting both static Images and continuous multi-frame Video clips (`SEEDBenchAdapter`) |
 | **Robotics Action Adapter** | ✅ Completed | Open X-Embodiment / RT-X System 1 perception-action decision adapter (`RoboticsActionAdapter`) |
-| **Interactive Decision Playground** | ✅ Completed | Gradio Web UI with dynamic candidate arbitration, live entropy gauge, and Jev Boolean Noul (`examples/interactive_demo.py`) |
+| **Generalized Decision Playground** | ✅ Completed | Open-domain Gradio Web UI with dynamic candidate inputs, pre-populated defaults, 1-click examples, and live entropy gauges (`examples/interactive_demo.py`) |
 | **Extended Real-World Evaluation** | ✅ Completed | 100-sample streaming evaluation on ScienceQA & SEED-Bench-2 with 10-bin ECE calibration (`benchmarks/run_extended_eval.py`) |
 | **Production `v1` Checkpoint** | ✅ Completed | Trained 2.21M params across multimodal datasets to `checkpoints/arbiter_omni_v1.pt` (8.46 MB, 86.7% val acc), loaded via `ArbiterOmniEngine.from_pretrained('v1')` |
 | **DirectML GPU Acceleration** | ✅ Completed | AMD Radeon RX 480 WSL2/Windows GPU acceleration setup (`scripts/setup_directml.sh`) and device dispatch tests |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 48/48 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML) |
+| **Unit Test Coverage** | ✅ Completed | 51/51 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML) |
 
 ---
 
