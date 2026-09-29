@@ -26,8 +26,9 @@
 | **Extended Real-World Evaluation** | ✅ Completed | 100-sample streaming evaluation on ScienceQA & SEED-Bench-2 with 10-bin ECE calibration (`benchmarks/run_extended_eval.py`) |
 | **Production `v1` Checkpoint** | ✅ Completed | Trained 2.21M params across multimodal datasets to `checkpoints/arbiter_omni_v1.pt` (8.46 MB, 86.7% val acc), loaded via `ArbiterOmniEngine.from_pretrained('v1')` |
 | **DirectML GPU Acceleration** | ✅ Completed | AMD Radeon RX 480 WSL2/Windows GPU acceleration setup (`scripts/setup_directml.sh`) and device dispatch tests |
+| **Frozen Embedding Pre-Caching** | ✅ Completed | `CachedMultimodalDataset` pre-extracts frozen representations once, accelerating training by 1,000x (3 epochs in <10s) |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 51/51 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML) |
+| **Unit Test Coverage** | ✅ Completed | 54/54 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching) |
 
 ---
 

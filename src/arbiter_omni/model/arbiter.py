@@ -202,3 +202,29 @@ class ArbiterOmniModel(nn.Module):
         )
 
         return logits, probs, entropy, fused_context
+
+    def forward_cached(
+        self,
+        question_embed: torch.Tensor,
+        modality_embeds: Dict[str, torch.Tensor],
+        presence_mask: Dict[str, torch.Tensor],
+        candidate_embeds: torch.Tensor,
+        candidate_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Executes fusion and decision scoring directly on pre-computed encoder embeddings,
+        bypassing perception forward passes.
+        """
+        fused_context = self.fusion(
+            question_embed=question_embed,
+            modality_embeds=modality_embeds,
+            presence_mask=presence_mask,
+        )
+
+        logits, probs, entropy = self.decision_head(
+            context_embed=fused_context,
+            candidate_embeds=candidate_embeds,
+            candidate_mask=candidate_mask,
+        )
+
+        return logits, probs, entropy, fused_context
