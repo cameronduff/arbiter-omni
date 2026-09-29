@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-65%2F65%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-71%2F71%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
@@ -69,7 +69,7 @@ flowchart TD
 
     subgraph Encoders["2. Frozen Multimodal Encoders"]
         E_T["Frozen Text Encoder"]
-        E_I["Frozen Vision Encoder"]
+        E_I["Frozen Vision Encoder\n(Global CLS + 7x7 Unpooled Spatial Patches)"]
         E_V["Temporal Frame Pooling"]
         E_A["Spectral Audio Projection"]
         E_C["Frozen Candidate Tokenizer"]
@@ -78,6 +78,7 @@ flowchart TD
     subgraph Fusion["3. Transformer Cross-Attention Fusion"]
         Mask["Dynamic Modality Presence Mask\n(Key-Padding Mask)"]
         TypeEmb["Learned Modality Type Embeddings\n[Query, Q, Text, Img, Vid, Aud]"]
+        SpatialPos["Learned 2D Spatial Positional Embeddings\n[P_1, ..., P_49]"]
         Query["Learned [DECISION_QUERY] Latent Token"]
         Transformer["Multi-Head Cross Attention Layers"]
     end
@@ -102,7 +103,7 @@ flowchart TD
     C --> E_C
 
     E_T & E_I & E_V & E_A --> Mask
-    Mask & TypeEmb & Query --> Transformer
+    Mask & TypeEmb & SpatialPos & Query --> Transformer
     E_T -.->|Question Embed| Transformer
 
     Transformer -->|Fused Context Vector| ScoreManifold
@@ -116,21 +117,25 @@ flowchart TD
 ## 🔬 Mathematical Formulation
 
 ### 1. Missing-Modality Masking & Token Assembly
-Let $\mathcal{M} = \{\text{text}, \text{image}, \text{video}, \text{audio}\}$ represent the input modalities. Each present modality $m \in \mathcal{M}$ produces an embedding $\mathbf{x}_m \in \mathbb{R}^{d_m}$. Missing modalities are assigned arbitrary zero vectors and marked in the boolean key-padding mask $\mathbf{M} \in \{0, 1\}^{L}$:
+Let $\mathcal{M} = \{\text{text}, \text{image}, \text{video}, \text{audio}\}$ represent the input modalities. Each present modality $m \in \mathcal{M}$ produces an embedding $\mathbf{x}_m \in \mathbb{R}^{d_m}$. For visual grounding, the image encoder additionally extracts unpooled $7 \times 7 = 49$ spatial patch representations $\mathbf{X}_{\text{patch}} \in \mathbb{R}^{P \times d_{\text{image}}}$.
+
+Missing modalities are assigned arbitrary zero vectors and marked in the boolean key-padding mask $\mathbf{M} \in \{0, 1\}^{L}$:
 
 $$\mathbf{t}_m = \text{LayerNorm}(\mathbf{W}_m \mathbf{x}_m) + \mathbf{e}_{\text{type}}(m)$$
 
-$$\mathbf{M}_j = \begin{cases} 0 & \text{if token } j \text{ is valid and present} \\ 1 & \text{if modality } j \text{ is missing (masked out)} \end{cases}$$
+$$\mathbf{p}_i = \text{LayerNorm}(\mathbf{W}_{\text{patch}} \mathbf{x}_{\text{patch}, i}) + \mathbf{e}_{\text{spatial}}(i), \quad i \in \{1, \dots, P\}$$
 
-The full multimodal sequence is assembled into token representations:
+$$\mathbf{M}_j = \begin{cases} 0 & \text{if token } j \text{ is valid and present} \\ 1 & \text{if token / modality } j \text{ is missing (masked out)} \end{cases}$$
 
-$$\mathbf{T} = \left[ \mathbf{t}_{\text{query}},\, \mathbf{t}_{\text{question}},\, \mathbf{t}_{\text{text}},\, \mathbf{t}_{\text{image}},\, \mathbf{t}_{\text{video}},\, \mathbf{t}_{\text{audio}} \right] \in \mathbb{R}^{6 \times d_h}$$
+The full multimodal sequence unites global modality latents and fine-grained spatial grounding tokens:
+
+$$\mathbf{T} = \left[ \mathbf{t}_{\text{query}},\, \mathbf{t}_{\text{question}},\, \mathbf{t}_{\text{text}},\, \mathbf{t}_{\text{image}},\, \mathbf{t}_{\text{video}},\, \mathbf{t}_{\text{audio}},\, \mathbf{p}_1, \dots, \mathbf{p}_P \right] \in \mathbb{R}^{(6 + P) \times d_h}$$
 
 and processed by a multi-head transformer with scaled dot-product attention:
 
 $$\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q} \mathbf{K}^\top}{\sqrt{d_k}} + \mathbf{M}_{\text{attn}}\right) \mathbf{V}$$
 
-The updated representation at index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
+When an image is absent, all $P$ spatial patch tokens are masked out ($\mathbf{M}_{\text{patch}} = 1$) alongside $\mathbf{t}_{\text{image}}$, preventing any spatial attention leakage or NaN artifacts. The updated representation at index 0 yields the unified multimodal context state $\mathbf{z}_{\text{context}} \in \mathbb{R}^{d_h}$.
 
 ### 2. Dynamic Candidate Interaction
 Given $K$ runtime candidate strings $\{c_1, \dots, c_K\}$, candidate embeddings $\mathbf{e}_{c_k}$ interact with context state $\mathbf{z}_{\text{context}}$ via dual projection:
@@ -370,6 +375,26 @@ print(f"Escalate System2: {result.escalate_system2}")   # True if ambiguity exce
 if result.escalate_system2:
     print(f"Reason:           {result.escalation_reason}") # e.g. "AMBIGUOUS_CONFORMAL_SET (size 2 > 1)"
     # Seamlessly route to slow deliberative System 2 reasoning (e.g. LLM chain-of-thought or operator)
+```
+
+### 7. Spatial Patch Cross-Attention for Visual Grounding
+
+Global pooled image representations (e.g. standard CLIP `[CLS]` embeddings) struggle when decisions require resolving localized object positions (e.g. identifying whether a visual obstacle is in the left or right corridor). ArbiterOmni extracts unpooled $7 \times 7 = 49$ spatial tokens directly from the vision transformer backbone and injects them into multi-head cross-attention with 2D spatial positional embeddings:
+
+```python
+from arbiter_omni.model import ArbiterOmniModel
+from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
+
+# Spatial patch grounding is enabled by default (use_spatial_patches=True)
+encoder = OpenCLIPMultimodalEncoder()
+model = ArbiterOmniModel(encoder=encoder, use_spatial_patches=True)
+
+# Patch representations are extracted and projected to the joint 512-d manifold:
+# image_patches shape: [batch_size, 49, 512]
+patches = encoder.encode_image_patches(images)
+
+# If images are missing, all 49 patch tokens are masked via key-padding mask
+# preventing any spatial leakage or NaN computation.
 ```
 
 ---

@@ -115,13 +115,18 @@ class ArbiterOmniTrainer:
             ):
                 if batch.get("is_cached", False):
                     cand_mask = batch["candidate_mask"].to(self.device)
+                    batch_patches = batch.get("image_patches", None)
+                    if batch_patches is not None and isinstance(batch_patches, torch.Tensor):
+                        batch_patches = batch_patches.to(self.device)
                     logits, probs, entropy, _ = self.model.forward_cached(
                         question_embed=batch["question_embed"].to(self.device),
                         modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                         presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
                         candidate_embeds=batch["candidate_embeds"].to(self.device),
                         candidate_mask=cand_mask,
+                        image_patches=batch_patches,
                     )
+
                 else:
                     cand_mask = batch.get("candidate_mask", None)
                     if cand_mask is not None and isinstance(cand_mask, torch.Tensor):
@@ -215,13 +220,18 @@ class ArbiterOmniTrainer:
                 ):
                     if batch.get("is_cached", False):
                         cand_mask = batch["candidate_mask"].to(self.device)
+                        batch_patches = batch.get("image_patches", None)
+                        if batch_patches is not None and isinstance(batch_patches, torch.Tensor):
+                            batch_patches = batch_patches.to(self.device)
                         logits, probs, entropy, _ = self.model.forward_cached(
                             question_embed=batch["question_embed"].to(self.device),
                             modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                             presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
                             candidate_embeds=batch["candidate_embeds"].to(self.device),
                             candidate_mask=cand_mask,
+                            image_patches=batch_patches,
                         )
+
                     else:
                         cand_mask = batch.get("candidate_mask", None)
                         if cand_mask is not None and isinstance(cand_mask, torch.Tensor):

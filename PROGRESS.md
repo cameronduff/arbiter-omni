@@ -29,8 +29,9 @@
 | **Frozen Embedding Pre-Caching** | ✅ Completed | `CachedMultimodalDataset` pre-extracts frozen representations once, accelerating training by 1,000x (3 epochs in <10s) |
 | **Hard-Negative Candidate Mining** | ✅ Completed | `HardNegativeMiner` semantic cosine similarity nearest-neighbor foils & contrastive margin ranking loss $\mathcal{L}_{\text{margin}}$ |
 | **Conformal Prediction & System 2 Gate** | ✅ Completed | Split conformal calibration ($(1 - \alpha)$ coverage guarantees) + `System2EscalationGate` automated ambiguity trigger |
+| **Spatial Patch Cross-Attention** | ✅ Completed | Unpooled $7 \times 7 = 49$ visual patch cross-attention with 2D spatial position embeddings for fine-grained grounding (`encode_image_patches`) |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 65/65 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets) |
+| **Unit Test Coverage** | ✅ Completed | 71/71 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches) |
 
 
 
@@ -90,5 +91,12 @@
 - **Empirical Coverage Verification**: Evaluated across 200 held-out test distributions; empirical coverage reached **91.5%** for nominal $90\%$ and **96.0%** for nominal $95\%$.
 - **Average Prediction Set Size**: $1.24$ candidates on confident multimodal inputs, dynamically expanding to $\ge 2$ candidates under modality dropout or high ambiguity.
 - **System 2 Escalation Gate**: Triggers `escalate_system2=True` with diagnostic reason (`HIGH_ENTROPY`, `AMBIGUOUS_CONFORMAL_SET`, `LOW_CONFIDENCE`), enabling zero-risk fallback to slow System 2 deliberative reasoning.
+
+### 8. Spatial Patch Cross-Attention & Visual Grounding
+- **Spatial Token Density**: Extracted unpooled $7 \times 7 = 49$ spatial tokens from OpenCLIP ViT backbone mapped into joint 512-dim embedding space (`tokens @ visual.proj`).
+- **2D Spatial Positional Embeddings**: Learned $196 \times 256$ coordinate embeddings dynamically indexed to preserve visual geometry.
+- **Zero-Leakage Masking**: When image modality is absent, all 49 patch tokens are masked via `src_key_padding_mask=True`, eliminating phantom spatial activations and gradient leakage.
+- **Local Grounding**: Allows the decision query to attend directly to localized regions for fine-grained spatial discrimination (e.g. left vs right path obstruction).
+
 
 

@@ -100,7 +100,28 @@ class MockMultimodalEncoder(BaseMultimodalEncoder):
         tensor = torch.tensor(np.stack(results), dtype=torch.float32, device=self.device)
         return tensor / (tensor.norm(dim=-1, keepdim=True) + 1e-8)
 
+    def encode_image_patches(self, images: Sequence[Any], num_patches: int = 49) -> torch.Tensor:
+        """
+        Generates synthetic unpooled spatial patch tokens [B, num_patches, image_dim].
+        Deterministic per-patch spatial offsets simulating 2D visual grid locations.
+        """
+        base_pooled = self.encode_image(images)  # [B, dim]
+        B = base_pooled.size(0)
+        # Create deterministic pseudo-spatial offsets across patches
+        grid_offsets = []
+        for p in range(num_patches):
+            px = (p % 7) / 7.0 - 0.5
+            py = (p // 7) / 7.0 - 0.5
+            offset = self._hash_to_vec(f"patch_offset:{px:.3f}:{py:.3f}")
+            grid_offsets.append(offset)
+        offsets_tensor = torch.tensor(np.stack(grid_offsets), dtype=torch.float32, device=self.device)  # [P, dim]
+        
+        # Combine base pooled with spatial grid offset: [B, P, dim]
+        patches = base_pooled.unsqueeze(1) + 0.15 * offsets_tensor.unsqueeze(0)
+        return patches / (patches.norm(dim=-1, keepdim=True) + 1e-8)
+
     def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
+
         """Encodes video by sampling frame representations and mean-pooling."""
         results = []
         for vid in videos:

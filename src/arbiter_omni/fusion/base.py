@@ -29,7 +29,9 @@ class BaseMultimodalFusion(nn.Module, ABC):
         question_embed: torch.Tensor,
         modality_embeds: Dict[ModalityType, torch.Tensor],
         presence_mask: Dict[ModalityType, torch.Tensor],
+        image_patches: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+
         """
         Fuses present modality embeddings conditioned on question representation.
         

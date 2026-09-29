@@ -75,6 +75,15 @@ class BaseMultimodalEncoder(nn.Module, ABC):
         """
         pass
 
+    def encode_image_patches(self, images: Sequence[Any]) -> torch.Tensor:
+        """
+        Embeds a batch of images into unpooled spatial patch tokens [B, P, image_dim].
+        Default fallback replicates/reshapes pooled image embedding to [B, 1, image_dim].
+        """
+        pooled = self.encode_image(images)
+        return pooled.unsqueeze(1)
+
+
     @abstractmethod
     def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
         """
