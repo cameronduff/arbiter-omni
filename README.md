@@ -8,7 +8,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![uv](https://img.shields.io/badge/Environment-uv-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://astral.sh/uv)
 [![OpenCLIP](https://img.shields.io/badge/Encoders-OpenCLIP%20%2B%20Spectral-059669?style=flat-square)](https://github.com/mlfoundations/open_clip)
-[![Tests](https://img.shields.io/badge/Tests-44%2F44%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-48%2F48%20Passing-10B981?style=flat-square&logo=pytest&logoColor=white)](tests/)
 [![Architecture](https://img.shields.io/badge/Paradigm-System%201%20Decision-8B5CF6?style=flat-square)](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
@@ -244,6 +244,26 @@ result = engine.decide(
 
 print(f"Active Channels: {result.active_modalities}") # ['audio']
 print(f"Decision:        {result.winner} ({result.confidence * 100:.1f}%)")
+```
+
+### 3. Hardware Dispatch & AMD GPU Acceleration (DirectML / WSL2)
+
+ArbiterOmni detects and dispatches compute dynamically across CUDA, AMD ROCm, Apple MPS, multi-core CPU, and **Microsoft DirectML** (enabling AMD Radeon GPUs such as the RX 480 on Windows & WSL2 via DirectX 12):
+
+```bash
+# Audit hardware and active compute dispatch
+uv run python -m arbiter_omni.device
+```
+
+To configure DirectML for AMD Radeon on WSL2 / Linux:
+
+```bash
+# Automated Python 3.12 + DirectML environment setup
+bash scripts/setup_directml.sh
+
+# Activate and execute with GPU acceleration
+source .venv-directml/bin/activate
+python -m arbiter_omni.device
 ```
 
 ---
