@@ -36,8 +36,20 @@ DEFAULT_QUESTION = "What animal is in this image?"
 DEFAULT_CANDIDATES = "Cat\nDog\nHorse\nRabbit\nBird"
 DEFAULT_TEXT = ""  # optional — leave blank by default
 
-# A simple placeholder image (a warm orange patch) so the UI isn't empty on launch
+# Default image: load user-provided photo.jpg if available, else synthetic fallback
 def _default_image() -> Image.Image:
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "assets", "kitten.jpg"),
+        os.path.join(os.path.dirname(__file__), "photo.jpg"),
+        os.path.join(os.path.dirname(__file__), "..", "photo.jpg"),
+        "photo.jpg",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                return Image.open(p).convert("RGB")
+            except Exception:
+                pass
     arr = np.full((224, 224, 3), (230, 140, 60), dtype=np.uint8)
     return Image.fromarray(arr)
 
@@ -45,7 +57,6 @@ def _default_image() -> Image.Image:
 # One-click examples — everyday, domain-agnostic tasks
 # ---------------------------------------------------------------------------
 # Each entry: [question, candidates (newline-separated), text_context, image, audio]
-# Images are generated as solid-colour placeholders; users can swap them for real photos.
 def _solid(r: int, g: int, b: int, size: int = 224) -> Image.Image:
     return Image.fromarray(np.full((size, size, 3), (r, g, b), dtype=np.uint8))
 
@@ -54,7 +65,7 @@ EXAMPLES: List[List[Any]] = [
         "What animal is in this image?",
         "Cat\nDog\nHorse\nRabbit\nBird",
         "",
-        _solid(210, 180, 140),   # tan — neutral animal placeholder
+        _default_image(),   # Orange kitten photo
         None,
     ],
     [
