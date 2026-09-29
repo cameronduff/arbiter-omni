@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.pt
+!checkpoints/*.pt
 *.pth
 .pytest_cache/
 .coverage
