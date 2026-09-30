@@ -37,8 +37,11 @@
 | **ViT-B-16 Visual Backbone (196 Patches)** | ✅ Completed | Upgraded visual encoder to OpenCLIP `ViT-B-16` extracting $14 \times 14 = 196$ unpooled spatial tokens with auto-resolved `laion2b_s34b_b88k` checkpoint tag |
 | **Modality Dropout & Cross-Attention** | ✅ Completed | `apply_modality_dropout` ($p=0.15$) + question-conditioned decision queries + multi-head spatial cross-attention with safe masking |
 | **Calibrated Temperature Scaling** | ✅ Completed | Post-hoc Platt/temperature scaling (`TemperatureCalibrator`) + inference-time temperature control on `DynamicDecisionHead` & `engine.decide(..., temperature=0.4)` yielding 99.97% sharpness |
+| **Inter-Frame Velocity Delta Projection** | ✅ Completed | Upgraded `SpatioTemporalVideoAttention` with directional velocity delta projection $\Delta F_t = F_{t+1} - F_t$ for motion trajectory discrimination |
+| **DirectML Autograd Scatter Fix** | ✅ Completed | Replaced in-place indexing and max-reduction with non-in-place `torch.where` and `argmax`+`gather` in contrastive margin loss, resolving HLSL autograd scatter crashes |
+| **Production `v2` Checkpoint (GPU Trained)** | ✅ Completed | Trained 12.53M trainable parameters on AMD Radeon RX 480 GPU across ScienceQA, AI2D, GQA, and SEED-Bench-2 to `checkpoints/arbiter_omni_v2.pt` (71.45 MB, 72.0% val acc, 4 layers, 8 heads, 512-dim, cross-attention) |
 | **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 105/105 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16, modality dropout, cross-attention, temperature calibration) |
+| **Unit Test Coverage** | ✅ Completed | 107/107 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16, modality dropout, cross-attention, temperature calibration, inter-frame velocity projection) |
 
 
 

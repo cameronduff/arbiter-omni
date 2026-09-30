@@ -85,14 +85,18 @@ def get_engine() -> Optional[Any]:
     if _ENGINE is None:
         try:
             device = resolve_device()
-            checkpoint_path = os.path.abspath(
+            v2_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v2.pt")
+            )
+            v1_path = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v1.pt")
             )
-            if os.path.exists(checkpoint_path):
+            checkpoint_path = v2_path if os.path.exists(v2_path) else (v1_path if os.path.exists(v1_path) else None)
+            if checkpoint_path and os.path.exists(checkpoint_path):
                 _ENGINE = ArbiterOmniEngine.from_pretrained(
                     checkpoint_path, encoder_type="openclip", device=device
                 )
-                logger.info("Loaded production arbiter_omni_v1.pt checkpoint.")
+                logger.info(f"Loaded production checkpoint: {os.path.basename(checkpoint_path)}")
             else:
                 encoder = MockMultimodalEncoder(embed_dim=128, device=device)
                 model = ArbiterOmniModel(encoder=encoder, hidden_dim=128, scoring_dim=128).to(device)
