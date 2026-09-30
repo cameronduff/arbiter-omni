@@ -138,6 +138,31 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             self.audio_encoder.freeze()
         return self
 
+    def _apply(self, fn, recurse=True):
+        """Controls submodule parameter dispatch to guarantee backbone stays on CPU when offloaded."""
+        if getattr(self, "_encoder_on_cpu", False):
+            if hasattr(self, "temporal_attention") and self.temporal_attention is not None:
+                self.temporal_attention._apply(fn, recurse=recurse)
+            if hasattr(self, "audio_encoder") and self.audio_encoder is not None:
+                self.audio_encoder._apply(fn, recurse=recurse)
+            return self
+        return super()._apply(fn, recurse=recurse)
+
+    def to(self, *args, **kwargs) -> OpenCLIPMultimodalEncoder:
+        """Dispatches encoder submodules while respecting CPU offload settings."""
+        device = torch._C._nn._parse_to(*args, **kwargs)[0]
+        if device is not None:
+            self._device = torch.device(device)
+            if hasattr(self, "temporal_attention") and self.temporal_attention is not None:
+                self.temporal_attention.to(*args, **kwargs)
+            if hasattr(self, "audio_encoder") and self.audio_encoder is not None:
+                self.audio_encoder.to(*args, **kwargs)
+            if not getattr(self, "_encoder_on_cpu", False):
+                if hasattr(self, "model") and self.model is not None:
+                    self.model.to(*args, **kwargs)
+            return self
+        return super().to(*args, **kwargs)
+
     @property
     def text_dim(self) -> int:
         return self._dim
@@ -167,21 +192,20 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     @property
     def backbone_device(self) -> torch.device:
         """Returns the device where backbone parameters reside (cpu or cuda/directml)."""
-        return getattr(self, "_encoder_device", self.device)
+        if getattr(self, "_encoder_on_cpu", False):
+            return torch.device("cpu")
+        try:
+            return next(self.model.parameters()).device
+        except (StopIteration, AttributeError):
+            return getattr(self, "_encoder_device", self.device)
 
     def encode_text(self, texts: Sequence[str]) -> torch.Tensor:
         """Embeds text prompts, questions, or candidate decisions.
 
-        AO-26: Routes tokens to ``_encoder_device`` (CPU for large backbones like SO400M),
+        AO-26: Routes tokens to ``backbone_device`` (CPU for large backbones like SO400M),
         then returns features on ``self.device`` so downstream fusion stays on GPU.
         """
-        enc_dev = getattr(self, "_encoder_device", None)
-        if enc_dev is None:
-            # Fallback: infer from model parameters (backward compat)
-            try:
-                enc_dev = next(self.model.parameters()).device
-            except (StopIteration, AttributeError):
-                enc_dev = self.device
+        enc_dev = self.backbone_device
         tokens = self.tokenizer(list(texts)).to(enc_dev)
         with torch.no_grad():
             features = self.model.encode_text(tokens)
@@ -191,10 +215,10 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     def encode_image(self, images: Sequence[Any]) -> torch.Tensor:
         """Embeds single images or keyframes.
 
-        AO-26: Sends preprocessed batch to ``_encoder_device`` (CPU for large backbones)
+        AO-26: Sends preprocessed batch to ``backbone_device`` (CPU for large backbones)
         and returns normalized features on ``self.device``.
         """
-        enc_dev = getattr(self, "_encoder_device", self.device)
+        enc_dev = self.backbone_device
         processed_tensors = []
         for img in images:
             if isinstance(img, str):
@@ -218,7 +242,7 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             [B, P, image_dim] tensor of normalized patch embeddings
             (P = 49 for ViT-B-32 [7x7 grid], P = 196 for ViT-B-16 [14x14 grid]).
         """
-        enc_dev = getattr(self, "_encoder_device", self.device)
+        enc_dev = self.backbone_device
         processed_tensors = []
         for img in images:
             if isinstance(img, str):

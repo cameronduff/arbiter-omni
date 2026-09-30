@@ -100,15 +100,25 @@ class SoftTopKRouter(nn.Module):
         # Routing probabilities
         probs = F.softmax(logits, dim=-1)  # [N, num_experts]
 
-        # Top-K selection
-        top_k_weights, top_k_indices = torch.topk(probs, self.top_k, dim=-1)
-        # Re-normalize so selected weights sum to 1 per token
-        top_k_weights = top_k_weights / (top_k_weights.sum(dim=-1, keepdim=True) + 1e-8)
+        # Top-K selection (broadcast-based, hardware-agnostic for DirectML / ROCm / CUDA)
+        top_k_indices = torch.topk(probs.detach(), self.top_k, dim=-1)[1]
+        classes = torch.arange(self.num_experts, device=logits.device)
+        mask = (top_k_indices.unsqueeze(-1) == classes.view(1, 1, -1)).any(dim=1).to(dtype=probs.dtype)
+        masked_probs = probs * mask
+        norm_weights = masked_probs / (masked_probs.sum(dim=-1, keepdim=True) + 1e-8)
+
+        # Construct top_k_weights [N, top_k] without scatter / gather autograd nodes
+        weights_list = []
+        for k in range(self.top_k):
+            slot_k = top_k_indices[:, k]
+            is_slot = (slot_k.unsqueeze(-1) == classes.unsqueeze(0)).to(dtype=probs.dtype)
+            w_k = (norm_weights * is_slot).sum(dim=-1)
+            weights_list.append(w_k)
+        top_k_weights = torch.stack(weights_list, dim=-1)
 
         # --- Auxiliary load-balancing loss (Switch Transformer formulation) ---
         # f_e: fraction of tokens routed to expert e (from hard top-k selection)
-        one_hot = torch.zeros_like(probs)
-        one_hot.scatter_(-1, top_k_indices[:, :1], 1.0)  # primary expert dispatch
+        one_hot = (top_k_indices[:, :1] == classes.unsqueeze(0)).to(dtype=probs.dtype)
         f_e = one_hot.mean(dim=0)  # [num_experts]
         # P_e: mean routing probability for expert e (from soft scores)
         P_e = probs.mean(dim=0)  # [num_experts]

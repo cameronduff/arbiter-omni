@@ -85,6 +85,9 @@ def get_engine() -> Optional[Any]:
     if _ENGINE is None:
         try:
             device = resolve_device()
+            v5_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v5.pt")
+            )
             v4_path = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v4.pt")
             )
@@ -98,9 +101,9 @@ def get_engine() -> Optional[Any]:
                 os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v1.pt")
             )
             checkpoint_path = (
-                v4_path
-                if os.path.exists(v4_path)
-                else (v3_path if os.path.exists(v3_path) else (v2_path if os.path.exists(v2_path) else (v1_path if os.path.exists(v1_path) else None)))
+                v5_path
+                if os.path.exists(v5_path)
+                else (v4_path if os.path.exists(v4_path) else (v3_path if os.path.exists(v3_path) else (v2_path if os.path.exists(v2_path) else (v1_path if os.path.exists(v1_path) else None))))
             )
             if checkpoint_path and os.path.exists(checkpoint_path):
                 _ENGINE = ArbiterOmniEngine.from_pretrained(
@@ -165,7 +168,7 @@ def predict_arbitration(
     # 1. Real Engine Execution Path
     if engine is not None:
         img_obj = None
-        if image:
+        if image is not None:
             if isinstance(image, str) and os.path.exists(image):
                 try:
                     img_obj = Image.open(image).convert("RGB")
@@ -173,6 +176,11 @@ def predict_arbitration(
                     img_obj = None
             elif isinstance(image, Image.Image):
                 img_obj = image
+            elif isinstance(image, np.ndarray):
+                try:
+                    img_obj = Image.fromarray(image).convert("RGB")
+                except Exception:
+                    img_obj = image
 
         video_data = None
         if video:
@@ -284,6 +292,37 @@ def arbitrate_decision(
 
 
 # ---------------------------------------------------------------------------
+# Continuous Live Streaming Arbitration [AO-28]
+# ---------------------------------------------------------------------------
+def predict_streaming_arbitration(
+    frame: Optional[Any],
+    question: str,
+    candidates_raw: str,
+    temperature: float = 0.5,
+) -> Tuple[str, Dict[str, float], float, float, float]:
+    """Processes continuous live streaming camera / video frames with instant turnaround [AO-28].
+
+    Returns:
+        winner_md: Markdown string with top-1 winner and latency
+        probs_dict: Calibrated probability distribution
+        conf: Prediction confidence
+        entropy: Decision entropy (nats)
+        latency_ms: Millisecond latency
+    """
+    t0 = time.perf_counter()
+    probs, conf, entropy, score = predict_arbitration(
+        question=question or "What action should be taken right now?",
+        candidates_raw=candidates_raw or "Hold position / monitor, Advance carefully, Retreat to safety, Signal alert",
+        image=frame,
+        temperature=temperature or 0.5,
+    )
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    winner = max(probs, key=probs.get) if probs else "N/A"
+    winner_md = f"### 🏆 Current Action: **{winner}** ({conf * 100:.1f}% confidence in `{latency_ms:.1f} ms`)"
+    return winner_md, probs, conf, entropy, round(latency_ms, 2)
+
+
+# ---------------------------------------------------------------------------
 # Pre-Loaded Interactive Scenarios
 # ---------------------------------------------------------------------------
 cat_asset = _get_asset_path("kitten.jpg") or ""
@@ -370,136 +409,198 @@ def build_app() -> gr.Blocks:
         gr.Markdown(
             f"""
 # ArbiterOmni
-### Zero-Shot Multimodal Decision Engine
-
-`Non-autoregressive` &nbsp;•&nbsp; `Calibrated Probabilities` &nbsp;•&nbsp; `Device: {device_label}`
+### Zero-Shot Multimodal Decision Engine & Live Streaming Arbitrator
+`Non-autoregressive` &nbsp;•&nbsp; `Sparse MoE Fusion (v5)` &nbsp;•&nbsp; `Calibrated Probabilities` &nbsp;•&nbsp; `Device: {device_label}`
             """
         )
 
-        # ── 2. Responsive Split-View (Inputs Left | Results Right) ─────────
-        with gr.Row():
-
-            # ── Left Column: Inputs ───────────────────────────────────────
-            with gr.Column(scale=5):
-                question_input = gr.Textbox(
-                    label="Question",
-                    placeholder="e.g., What animal is shown in this image?",
-                    value="What animal is shown in this image?",
-                    lines=2,
-                )
-
-                candidates_input = gr.Textbox(
-                    label="Candidate Choices",
-                    placeholder="Enter choices separated by commas or new lines (e.g., Cat, Dog, Rabbit)",
-                    value="Cat, Dog, Fox",
-                    lines=3,
-                )
-
+        with gr.Tabs():
+            # ─────────────────────────────────────────────────────────────
+            # TAB 1: Static Multimodal Decision Arbitration
+            # ─────────────────────────────────────────────────────────────
+            with gr.Tab("⚡ Multimodal Decision Arbitration"):
+                # ── Responsive Split-View (Inputs Left | Results Right) ────
                 with gr.Row():
-                    image_input = gr.Image(
-                        label="Image Context (Optional)",
-                        type="filepath",
-                        value=cat_asset if os.path.exists(cat_asset) else None,
-                    )
-                    video_input = gr.Video(
-                        label="Video Context (Optional)",
-                    )
-                    audio_input = gr.Audio(
-                        label="Audio Context (Optional)",
-                        type="filepath",
-                    )
+                    # ── Left Column: Inputs ───────────────────────────────
+                    with gr.Column(scale=5):
+                        question_input = gr.Textbox(
+                            label="Question",
+                            placeholder="e.g., What animal is shown in this image?",
+                            value="What animal is shown in this image?",
+                            lines=2,
+                        )
 
-                with gr.Accordion("Advanced Parameters", open=False):
-                    context_input = gr.Textbox(
-                        label="Extra Context (Optional Text)",
-                        placeholder="Supporting background notes, sensor readings, or textual premises...",
-                        lines=2,
-                    )
-                    temperature_slider = gr.Slider(
-                        minimum=0.1,
-                        maximum=2.0,
-                        value=0.7,
-                        step=0.05,
-                        label="Temperature / Sharpness",
-                        info="Lower values (<1.0) produce sharper, more decisive probability distributions; higher values soften confidence.",
-                    )
+                        candidates_input = gr.Textbox(
+                            label="Candidate Choices",
+                            placeholder="Enter choices separated by commas or new lines (e.g., Cat, Dog, Rabbit)",
+                            value="Cat, Dog, Fox",
+                            lines=3,
+                        )
 
-                submit_btn = gr.Button("⚡ Run Arbitration", variant="primary", size="lg")
+                        with gr.Row():
+                            image_input = gr.Image(
+                                label="Image Context (Optional)",
+                                type="filepath",
+                                value=cat_asset if os.path.exists(cat_asset) else None,
+                            )
+                            video_input = gr.Video(
+                                label="Video Context (Optional)",
+                            )
+                            audio_input = gr.Audio(
+                                label="Audio Context (Optional)",
+                                type="filepath",
+                            )
 
-            # ── Right Column: Outputs ──────────────────────────────────────
-            with gr.Column(scale=5):
-                probs_output = gr.Label(
-                    label="Calibrated Probability Distribution",
-                    num_top_classes=5,
+                        with gr.Accordion("Advanced Parameters", open=False):
+                            context_input = gr.Textbox(
+                                label="Extra Context (Optional Text)",
+                                placeholder="Supporting background notes, sensor readings, or textual premises...",
+                                lines=2,
+                            )
+                            temperature_slider = gr.Slider(
+                                minimum=0.1,
+                                maximum=2.0,
+                                value=0.7,
+                                step=0.05,
+                                label="Temperature / Sharpness",
+                                info="Lower values (<1.0) produce sharper, more decisive probability distributions; higher values soften confidence.",
+                            )
+
+                        submit_btn = gr.Button("⚡ Run Arbitration", variant="primary", size="lg")
+
+                    # ── Right Column: Outputs ─────────────────────────────
+                    with gr.Column(scale=5):
+                        probs_output = gr.Label(
+                            label="Calibrated Probability Distribution",
+                            num_top_classes=5,
+                        )
+
+                        with gr.Row():
+                            confidence_out = gr.Number(
+                                label="Prediction Confidence",
+                                precision=3,
+                                interactive=False,
+                            )
+                            entropy_out = gr.Number(
+                                label="Shannon Entropy (nats)",
+                                precision=3,
+                                interactive=False,
+                            )
+                            score_out = gr.Number(
+                                label="Decision Margin Score",
+                                precision=3,
+                                interactive=False,
+                            )
+
+                # ── Wire Primary Action Button ────────────────────────────
+                submit_btn.click(
+                    fn=predict_arbitration,
+                    inputs=[
+                        question_input,
+                        candidates_input,
+                        image_input,
+                        video_input,
+                        audio_input,
+                        context_input,
+                        temperature_slider,
+                    ],
+                    outputs=[
+                        probs_output,
+                        confidence_out,
+                        entropy_out,
+                        score_out,
+                    ],
                 )
 
+                # ── Built-in Interactive Examples (5-Second Evaluation) ───
+                gr.Examples(
+                    examples=EXAMPLES,
+                    inputs=[
+                        question_input,
+                        candidates_input,
+                        image_input,
+                        video_input,
+                        audio_input,
+                        context_input,
+                        temperature_slider,
+                    ],
+                    outputs=[
+                        probs_output,
+                        confidence_out,
+                        entropy_out,
+                        score_out,
+                    ],
+                    fn=predict_arbitration,
+                    cache_examples=False,
+                    label="Interactive Multi-Modal Examples (Click any scenario to test immediately)",
+                )
+
+            # ─────────────────────────────────────────────────────────────
+            # TAB 2: Continuous Live Streaming Arbitrator [AO-28]
+            # ─────────────────────────────────────────────────────────────
+            with gr.Tab("🎥 Live Continuous Streaming Arbitrator [AO-28]"):
+                gr.Markdown(
+                    """
+### Real-Time Continuous Video / Webcam Arbitration
+Stream live video frames directly into ArbiterOmni's non-autoregressive decision engine.
+Every frame is scored in parallel against all candidate actions within milliseconds.
+                    """
+                )
                 with gr.Row():
-                    confidence_out = gr.Number(
-                        label="Prediction Confidence",
-                        precision=3,
-                        interactive=False,
-                    )
-                    entropy_out = gr.Number(
-                        label="Shannon Entropy (nats)",
-                        precision=3,
-                        interactive=False,
-                    )
-                    score_out = gr.Number(
-                        label="Decision Margin Score",
-                        precision=3,
-                        interactive=False,
-                    )
+                    with gr.Column(scale=5):
+                        stream_cam = gr.Image(
+                            sources=["webcam"],
+                            streaming=True,
+                            label="Live Camera Feed",
+                            type="pil",
+                        )
+                        stream_question = gr.Textbox(
+                            label="Live Arbitration Objective",
+                            value="What immediate action should the agent take?",
+                            lines=2,
+                        )
+                        stream_candidates = gr.Textbox(
+                            label="Dynamic Action Candidates (comma or newline separated)",
+                            value="Hold position / monitor, Advance cautiously, Halt immediately, Execute evasive maneuver",
+                            lines=3,
+                        )
+                        stream_temp = gr.Slider(
+                            minimum=0.1,
+                            maximum=1.5,
+                            value=0.4,
+                            step=0.05,
+                            label="Decision Sharpness / Temperature",
+                            info="Lower values yield sharp, decisive action commands (<0.5).",
+                        )
+                        stream_btn = gr.Button("⚡ Arbitrate Current Frame", variant="primary", size="lg")
 
-        # ── 3. Wire Primary Action Button ─────────────────────────────────
-        submit_btn.click(
-            fn=predict_arbitration,
-            inputs=[
-                question_input,
-                candidates_input,
-                image_input,
-                video_input,
-                audio_input,
-                context_input,
-                temperature_slider,
-            ],
-            outputs=[
-                probs_output,
-                confidence_out,
-                entropy_out,
-                score_out,
-            ],
-        )
+                    with gr.Column(scale=5):
+                        stream_winner_md = gr.Markdown("### 🏆 Real-Time Action: *Awaiting video feed...*")
+                        stream_probs = gr.Label(
+                            label="Live Action Probability Distribution",
+                            num_top_classes=5,
+                        )
+                        with gr.Row():
+                            stream_conf = gr.Number(label="Action Confidence", precision=3, interactive=False)
+                            stream_entropy = gr.Number(label="Live Decision Entropy (nats)", precision=3, interactive=False)
+                            stream_lat = gr.Number(label="Turnaround Latency (ms)", precision=2, interactive=False)
 
-        # ── 4. Built-in Interactive Examples (5-Second Evaluation) ────────
-        gr.Examples(
-            examples=EXAMPLES,
-            inputs=[
-                question_input,
-                candidates_input,
-                image_input,
-                video_input,
-                audio_input,
-                context_input,
-                temperature_slider,
-            ],
-            outputs=[
-                probs_output,
-                confidence_out,
-                entropy_out,
-                score_out,
-            ],
-            fn=predict_arbitration,
-            cache_examples=False,
-            label="Interactive Multi-Modal Examples (Click any scenario to test immediately)",
-        )
+                # Connect streaming frame events and manual frame button
+                stream_inputs = [stream_cam, stream_question, stream_candidates, stream_temp]
+                stream_outputs = [stream_winner_md, stream_probs, stream_conf, stream_entropy, stream_lat]
 
-        # ── 5. Information Drawer ─────────────────────────────────────────
+                stream_cam.stream(fn=predict_streaming_arbitration, inputs=stream_inputs, outputs=stream_outputs)
+                stream_cam.change(fn=predict_streaming_arbitration, inputs=stream_inputs, outputs=stream_outputs)
+                stream_btn.click(fn=predict_streaming_arbitration, inputs=stream_inputs, outputs=stream_outputs)
+
+        # ── 3. Information Drawer ─────────────────────────────────────────
         with gr.Accordion("ℹ️ Model Architecture & Methodology", open=False):
             gr.Markdown(
                 """
 ### How ArbiterOmni Works
 - **Non-Autoregressive Forward Pass:** Evaluates all candidate options simultaneously in a single forward pass without generating tokens one by one.
-- **Frozen Encoders:** Uses frozen high-capacity multimodal encoders (OpenCLIP vision, CLAP audio, Spatio-Temporal Video Attention) with a lean, trainable cross-attention fusion layer.
+- **Sparse Mixture-of-Experts (v5):** 4-layer MoE fusion with specialized experts (Text, Vision, Temporal, Audio) and Top-2 routing.
+- **Frozen Encoders:** Uses frozen high-capacity multimodal encoders (OpenCLIP / SigLIP vision, CLAP audio, Spatio-Temporal Video Attention) with a lean, trainable MoE cross-attention fusion layer.
 - **Dynamic Candidate Scoring:** Choices are never hardcoded class indices; they are dynamically projected and scored via interaction with the fused multimodal state.
 - **Missing Modality Masking:** If an image, video, or audio clip is absent, attention masks explicitly prevent leakage and hallucinations.
 - **Calibrated Uncertainty:** Returns softmax probability distributions accompanied by Shannon decision entropy and calibrated confidence metrics.

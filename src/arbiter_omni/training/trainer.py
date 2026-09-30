@@ -225,6 +225,12 @@ class ArbiterOmniTrainer:
                     margin_loss = torch.tensor(0.0, device=self.device)
                     raw_loss = ce_loss
 
+                # Sparse MoE Load-Balancing Aux Loss [AO-27, AO-28]
+                if hasattr(self.model, "moe_aux_loss"):
+                    aux = self.model.moe_aux_loss
+                    if isinstance(aux, torch.Tensor) and aux.item() > 0:
+                        raw_loss = raw_loss + getattr(self.config, "moe_aux_lambda", 0.01) * aux.to(self.device)
+
                 loss = raw_loss / accum_steps
 
             self.scaler.scale(loss).backward()
@@ -374,6 +380,12 @@ class ArbiterOmniTrainer:
                         margin_loss = torch.tensor(0.0, device=self.device)
                         loss = ce_loss
 
+                    # Sparse MoE Load-Balancing Aux Loss [AO-27, AO-28]
+                    if hasattr(self.model, "moe_aux_loss"):
+                        aux = self.model.moe_aux_loss
+                        if isinstance(aux, torch.Tensor) and aux.item() > 0:
+                            loss = loss + getattr(self.config, "moe_aux_lambda", 0.01) * aux.to(self.device)
+
                 preds = torch.argmax(probs, dim=-1)
                 correct += int((preds == targets).sum().item())
                 total_samples += len(targets)
@@ -468,8 +480,8 @@ class ArbiterOmniTrainer:
                 f"Speed: {speed_str}{val_str}"
             )
 
-        if self.config.save_path:
-            self.save_checkpoint(self.config.save_path)
+            if self.config.save_path:
+                self.save_checkpoint(self.config.save_path)
 
         return history
 
@@ -488,6 +500,10 @@ class ArbiterOmniTrainer:
                 "model_name": getattr(self.model.encoder, "model_name", "ViT-B-32"),
                 "enable_spatial_cross_attention": getattr(fusion_mod, "enable_spatial_cross_attention", False),
                 "max_spatial_patches": getattr(fusion_mod, "max_spatial_patches", 196),
+                "use_moe": getattr(fusion_mod, "use_moe", False),
+                "moe_num_layers": getattr(getattr(fusion_mod, "moe_transformer", None), "num_moe_layers", 4),
+                "moe_num_experts": getattr(getattr(fusion_mod, "moe_transformer", None), "num_experts", 4),
+                "moe_top_k": getattr(getattr(fusion_mod, "moe_transformer", None), "top_k", 2),
             },
         }
         torch.save(state, path)

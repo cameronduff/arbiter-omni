@@ -117,9 +117,11 @@ class CachedSample:
     @property
     def candidate_embeds(self) -> torch.Tensor:
         """Returns candidate embeddings as float32, dequantizing INT8 if needed."""
-        if self._candidate_embeds_q is not None:
+        if getattr(self, "_candidate_embeds_q", None) is not None:
             return int8_dequantize(self._candidate_embeds_q, self._candidate_embeds_scale)
-        return self._candidate_embeds
+        if hasattr(self, "_candidate_embeds") and self._candidate_embeds is not None:
+            return self._candidate_embeds
+        return self.__dict__.get("candidate_embeds")
 
     @candidate_embeds.setter
     def candidate_embeds(self, value: torch.Tensor) -> None:
@@ -127,13 +129,16 @@ class CachedSample:
         self._candidate_embeds = value
         self._candidate_embeds_q = None
         self._candidate_embeds_scale = None
+        self.__dict__.pop("candidate_embeds", None)
 
     @property
     def image_patches(self) -> Optional[torch.Tensor]:
         """Returns spatial image patches as float32, dequantizing INT8 if needed."""
-        if self._image_patches_q is not None:
+        if getattr(self, "_image_patches_q", None) is not None:
             return int8_dequantize(self._image_patches_q, self._image_patches_scale)
-        return self._image_patches
+        if hasattr(self, "_image_patches") and self._image_patches is not None:
+            return self._image_patches
+        return self.__dict__.get("image_patches")
 
     @image_patches.setter
     def image_patches(self, value: Optional[torch.Tensor]) -> None:
@@ -141,6 +146,7 @@ class CachedSample:
         self._image_patches = value
         self._image_patches_q = None
         self._image_patches_scale = None
+        self.__dict__.pop("image_patches", None)
 
     @property
     def memory_bytes(self) -> int:
@@ -148,16 +154,47 @@ class CachedSample:
         total = self.question_embed.nelement() * self.question_embed.element_size()
         for v in self.modality_embeds.values():
             total += v.nelement() * v.element_size()
-        if self._candidate_embeds_q is not None:
+        if getattr(self, "_candidate_embeds_q", None) is not None:
             total += self._candidate_embeds_q.nelement() * self._candidate_embeds_q.element_size()
-        elif self._candidate_embeds is not None:
+        elif hasattr(self, "_candidate_embeds") and self._candidate_embeds is not None:
             total += self._candidate_embeds.nelement() * self._candidate_embeds.element_size()
-        if self._image_patches_q is not None:
+        elif "candidate_embeds" in self.__dict__ and self.__dict__["candidate_embeds"] is not None:
+            total += self.__dict__["candidate_embeds"].nelement() * self.__dict__["candidate_embeds"].element_size()
+
+        if getattr(self, "_image_patches_q", None) is not None:
             total += self._image_patches_q.nelement() * self._image_patches_q.element_size()
-        elif self._image_patches is not None:
+        elif hasattr(self, "_image_patches") and self._image_patches is not None:
             total += self._image_patches.nelement() * self._image_patches.element_size()
+        elif "image_patches" in self.__dict__ and self.__dict__["image_patches"] is not None:
+            total += self.__dict__["image_patches"].nelement() * self.__dict__["image_patches"].element_size()
         return total
 
+    def to_int8(self) -> CachedSample:
+        """Converts this sample's float32 candidate_embeds and image_patches to INT8 in-place."""
+        cands = getattr(self, "_candidate_embeds", None)
+        if cands is None:
+            cands = self.__dict__.get("candidate_embeds", None)
+        if cands is not None and cands.numel() > 0:
+            self._candidate_embeds_q, self._candidate_embeds_scale = int8_quantize(cands)
+            self._candidate_embeds = None
+            self.__dict__.pop("candidate_embeds", None)
+        else:
+            self._candidate_embeds_q = None
+            self._candidate_embeds_scale = None
+
+        patches = getattr(self, "_image_patches", None)
+        if patches is None:
+            patches = self.__dict__.get("image_patches", None)
+        if patches is not None and patches.numel() > 0:
+            self._image_patches_q, self._image_patches_scale = int8_quantize(patches)
+            self._image_patches = None
+            self.__dict__.pop("image_patches", None)
+        else:
+            self._image_patches_q = None
+            self._image_patches_scale = None
+
+        self.use_int8 = True
+        return self
 
 
 class CachedMultimodalDataset(Dataset):
@@ -168,6 +205,12 @@ class CachedMultimodalDataset(Dataset):
 
     def __init__(self, samples: List[CachedSample]):
         self.samples = samples
+
+    def to_int8(self) -> CachedMultimodalDataset:
+        """Quantizes all resident samples to INT8 in-place (~75% RAM reduction)."""
+        for s in self.samples:
+            s.to_int8()
+        return self
 
     def __len__(self) -> int:
         return len(self.samples)

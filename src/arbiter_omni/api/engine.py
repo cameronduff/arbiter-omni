@@ -19,6 +19,7 @@ from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.model.arbiter import ArbiterOmniModel
 from arbiter_omni.model.decision_head import DynamicDecisionHead
 from arbiter_omni.types import DecisionResult, ModalityType, MultimodalSample
+from arbiter_omni.device import resolve_device
 
 
 
@@ -38,7 +39,7 @@ class ArbiterOmniEngine:
         if device is not None:
             self.device = torch.device(device)
         else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = resolve_device()
 
         self.model = model.to(self.device)
         self.model.eval()
@@ -78,14 +79,18 @@ class ArbiterOmniEngine:
             pretrained_dataset: Optional OpenCLIP checkpoint tag (auto-resolved if None).
             device: Optional torch device.
         """
-        dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dev = torch.device(device) if device else resolve_device()
 
+        cpu_offload = kwargs.pop("cpu_offload_encoder", False)
         if encoder_type == "openclip":
             encoder = OpenCLIPMultimodalEncoder(
-                model_name=openclip_model, pretrained=pretrained_dataset, device=dev
+                model_name=openclip_model,
+                pretrained=pretrained_dataset,
+                device=dev,
+                cpu_offload_encoder=cpu_offload,
             )
         elif encoder_type == "mock":
-            encoder = MockMultimodalEncoder(embed_dim=128, device=dev)
+            encoder = MockMultimodalEncoder(embed_dim=kwargs.get("embed_dim", 128), device=dev)
         else:
             raise ValueError(f"Unknown encoder_type: {encoder_type}. Choose 'openclip' or 'mock'.")
 
@@ -112,14 +117,14 @@ class ArbiterOmniEngine:
         Loads an ArbiterOmniEngine instance initialized with pretrained weights.
 
         Args:
-            checkpoint_name_or_path: Checkpoint tag ('v1') or filepath to .pt checkpoint.
+            checkpoint_name_or_path: Checkpoint tag ('v1', 'v2', 'v3', 'v4', 'v5') or filepath to .pt checkpoint.
             encoder_type: 'openclip' or 'mock'.
             device: Target torch device or device string.
         """
-        dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dev = torch.device(device) if device else resolve_device()
 
         path = checkpoint_name_or_path
-        if path in ("v1", "v2", "v3", "v4"):
+        if path in ("v1", "v2", "v3", "v4", "v5"):
             tag_name = f"arbiter_omni_{path}.pt"
             candidates = [
                 f"checkpoints/{tag_name}",
@@ -134,7 +139,7 @@ class ArbiterOmniEngine:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Checkpoint '{checkpoint_name_or_path}' could not be resolved at path: {path}. "
-                "Ensure checkpoints/arbiter_omni_v1.pt (or v2/v3/v4) exists or run scripts/train_v1.py."
+                "Ensure checkpoints/arbiter_omni_v1.pt (or v2/v3/v4/v5) exists or run scripts/train_v1.py or train_v4.py."
             )
 
         # Inspect checkpoint for architectural parameters if present
@@ -163,6 +168,21 @@ class ArbiterOmniEngine:
             elif "scoring_net.0.weight" in head_sd:
                 kwargs["scoring_dim"] = head_sd["scoring_net.0.weight"].shape[0]
 
+        # MoE configuration [AO-27, AO-28]
+        if "use_moe" not in kwargs:
+            if "use_moe" in m_cfg:
+                kwargs["use_moe"] = m_cfg["use_moe"]
+            elif any(k.startswith("moe_transformer.") for k in fusion_sd.keys()) or "v5" in str(path):
+                kwargs["use_moe"] = True
+
+        if kwargs.get("use_moe", False):
+            if "moe_num_layers" not in kwargs:
+                kwargs["moe_num_layers"] = m_cfg.get("moe_num_layers", 4)
+            if "moe_num_experts" not in kwargs:
+                kwargs["moe_num_experts"] = m_cfg.get("moe_num_experts", 4)
+            if "moe_top_k" not in kwargs:
+                kwargs["moe_top_k"] = m_cfg.get("moe_top_k", 2)
+
         if "num_layers" not in kwargs:
             if "num_layers" in m_cfg:
                 kwargs["num_layers"] = m_cfg["num_layers"]
@@ -188,12 +208,14 @@ class ArbiterOmniEngine:
         if "max_spatial_patches" not in kwargs:
             if "max_spatial_patches" in m_cfg:
                 kwargs["max_spatial_patches"] = m_cfg["max_spatial_patches"]
-            elif "v4" in str(path):
+            elif "v4" in str(path) or "v5" in str(path):
                 kwargs["max_spatial_patches"] = 980
 
         if "openclip_model" not in kwargs:
             if "model_name" in m_cfg:
                 kwargs["openclip_model"] = m_cfg["model_name"]
+            elif "v5" in str(path):
+                kwargs["openclip_model"] = "ViT-SO400M-14-SigLIP-384"
             elif "v4" in str(path) or "v3" in str(path):
                 kwargs["openclip_model"] = "ViT-B-16-SigLIP"
             elif "v2" in str(path):

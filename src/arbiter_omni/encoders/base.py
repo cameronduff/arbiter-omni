@@ -28,6 +28,10 @@ class BaseMultimodalEncoder(nn.Module, ABC):
     def device(self) -> torch.device:
         return self._device
 
+    @device.setter
+    def device(self, val: Union[str, torch.device]):
+        self._device = torch.device(val)
+
     @property
     @abstractmethod
     def text_dim(self) -> int:

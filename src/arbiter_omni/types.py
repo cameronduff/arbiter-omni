@@ -63,6 +63,11 @@ class DecisionResult(BaseModel):
         description="Diagnostic reason for System 2 escalation if triggered.",
     )
 
+    @property
+    def decision(self) -> str:
+        """Alias for top-1 winner decision."""
+        return self.winner
+
 
 
 class MultimodalSample(BaseModel):
