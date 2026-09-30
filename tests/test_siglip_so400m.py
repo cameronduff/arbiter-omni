@@ -57,16 +57,25 @@ def _make_fake_tokenizer():
 def _build_mock_oc_model(param_count: int, out_dim: int):
     """Builds a minimal mock open_clip model with real torch parameter tensors.
 
-    Uses real nn.Parameter objects so param counting works correctly,
-    and real tensors for encode_text/encode_image outputs so device/shape asserts work.
+    Uses FakeParam (subclass of nn.Parameter) so param counting works correctly
+    without allocating gigabytes of memory for 200M+ parameter mocks.
     """
     import torch.nn as nn
+
+    class FakeParam(nn.Parameter):
+        def __new__(cls, data, count):
+            obj = super().__new__(cls, data, requires_grad=False)
+            obj._param_count = count
+            return obj
+
+        def numel(self):
+            return self._param_count
 
     class _MockOCModel(nn.Module):
         def __init__(self):
             super().__init__()
-            # Single large parameter that sums to param_count
-            self.backbone = nn.Parameter(torch.zeros(param_count), requires_grad=False)
+            # Lightweight parameter that reports param_count without allocating memory
+            self.backbone = FakeParam(torch.zeros(1), param_count)
             self.visual = MagicMock()
             self.visual.output_dim = out_dim
 

@@ -48,6 +48,10 @@ class ArbiterOmniModel(nn.Module):
         use_spatial_patches: bool = True,
         modality_dropout_prob: float = 0.0,
         max_spatial_patches: int = 196,
+        use_moe: bool = False,
+        moe_num_layers: int = 4,
+        moe_num_experts: int = 4,
+        moe_top_k: int = 2,
         **kwargs,
     ):
         super().__init__()
@@ -73,6 +77,10 @@ class ArbiterOmniModel(nn.Module):
                 dim_feedforward=hidden_dim * 2,
                 enable_spatial_cross_attention=enable_spatial_cross_attention,
                 max_spatial_patches=max_spatial_patches,
+                use_moe=use_moe,
+                moe_num_layers=moe_num_layers,
+                moe_num_experts=moe_num_experts,
+                moe_top_k=moe_top_k,
             )
         else:
             self.fusion = fusion
@@ -86,6 +94,17 @@ class ArbiterOmniModel(nn.Module):
             )
         else:
             self.decision_head = decision_head
+
+    @property
+    def moe_aux_loss(self) -> torch.Tensor:
+        """Returns the MoE load-balancing auxiliary loss from the fusion module.
+
+        Returns 0.0 when use_moe=False. Add to training loss with coefficient ~0.01
+        to prevent routing collapse without dominating the task objective.
+        """
+        if hasattr(self.fusion, "moe_aux_loss"):
+            return self.fusion.moe_aux_loss
+        return torch.tensor(0.0)
 
     @property
     def device(self) -> torch.device:

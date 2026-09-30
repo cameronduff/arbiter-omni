@@ -21,6 +21,11 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
     a learned modality-type embedding, and attended to by a learned [DECISION_QUERY] token.
     Missing modalities are strictly masked using PyTorch key_padding_mask, preventing any
     leakage or zero-vector skew.
+
+    AO-27: When ``use_moe=True``, the standard dense TransformerEncoder stack is replaced
+    with a 4-layer Sparse Mixture-of-Experts (SparseMoEMultimodalFusion) block.
+    The load-balancing auxiliary loss is exposed via ``moe_aux_loss`` and should be
+    added to the training objective with a small weight (e.g. 0.01).
     """
 
     MODALITY_ORDER = [
@@ -41,6 +46,10 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         condition_query_on_question: bool = False,
         enable_spatial_cross_attention: bool = False,
         max_spatial_patches: int = 980,
+        use_moe: bool = False,
+        moe_num_layers: int = 4,
+        moe_num_experts: int = 4,
+        moe_top_k: int = 2,
     ):
         super().__init__(hidden_dim=hidden_dim)
         self.num_heads = num_heads
@@ -49,6 +58,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         self.condition_query_on_question = condition_query_on_question
         self.enable_spatial_cross_attention = enable_spatial_cross_attention
         self.max_spatial_patches = max_spatial_patches
+        self.use_moe = use_moe
 
         # Projections for each input stream to shared hidden dimension
         self.projections = nn.ModuleDict()
@@ -78,20 +88,46 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             )
             self.cross_norm = nn.LayerNorm(hidden_dim)
 
-        # Transformer encoder layers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_layers, enable_nested_tensor=False
-        )
-        self.output_norm = nn.LayerNorm(hidden_dim)
+        # ---- Transformer stack: dense OR Sparse MoE [AO-27] ----
+        if use_moe:
+            from arbiter_omni.fusion.moe import SparseMoEMultimodalFusion
+            self.moe_transformer = SparseMoEMultimodalFusion(
+                hidden_dim=hidden_dim,
+                num_moe_layers=moe_num_layers,
+                num_experts=moe_num_experts,
+                top_k=moe_top_k,
+                ffn_dim=dim_feedforward,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
+            self.transformer = None
+            self.output_norm = nn.Identity()  # norm is inside SparseMoEMultimodalFusion
+        else:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=num_heads,
+                dim_feedforward=dim_feedforward,
+                dropout=dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer, num_layers=num_layers, enable_nested_tensor=False
+            )
+            self.moe_transformer = None
+            self.output_norm = nn.LayerNorm(hidden_dim)
+
+    @property
+    def moe_aux_loss(self) -> torch.Tensor:
+        """Returns the accumulated MoE load-balancing auxiliary loss from the last forward.
+
+        Returns zero when ``use_moe=False``. Add to training loss with a small coefficient
+        (recommended: 0.01) to prevent expert routing collapse.
+        """
+        if self.moe_transformer is not None:
+            return self.moe_transformer.accumulated_aux_loss
+        return torch.tensor(0.0)
 
     def forward(
         self,
@@ -198,10 +234,13 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         # Shape: [B, Seq_Len]
         key_padding_mask = torch.cat(mask_list, dim=1)
 
-        # Attention processing
-        transformed = self.transformer(tokens, src_key_padding_mask=key_padding_mask)
+        # ---- Attention processing: dense OR Sparse MoE [AO-27] ----
+        if self.use_moe and self.moe_transformer is not None:
+            transformed = self.moe_transformer(tokens, src_key_padding_mask=key_padding_mask)
+        else:
+            transformed = self.transformer(tokens, src_key_padding_mask=key_padding_mask)
+            transformed = self.output_norm(transformed)
 
         # Extract the decision query output token (index 0)
-        fused_context = self.output_norm(transformed[:, 0, :])
+        fused_context = transformed[:, 0, :]
         return fused_context
-
