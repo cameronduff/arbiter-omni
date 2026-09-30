@@ -119,7 +119,7 @@ class ArbiterOmniEngine:
         dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         path = checkpoint_name_or_path
-        if path in ("v1", "v2"):
+        if path in ("v1", "v2", "v3"):
             tag_name = f"arbiter_omni_{path}.pt"
             candidates = [
                 f"checkpoints/{tag_name}",
@@ -134,7 +134,7 @@ class ArbiterOmniEngine:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Checkpoint '{checkpoint_name_or_path}' could not be resolved at path: {path}. "
-                "Ensure checkpoints/arbiter_omni_v1.pt (or v2) exists or run scripts/train_v1.py."
+                "Ensure checkpoints/arbiter_omni_v1.pt (or v2/v3) exists or run scripts/train_v1.py."
             )
 
         # Inspect checkpoint for architectural parameters if present
@@ -188,6 +188,8 @@ class ArbiterOmniEngine:
         if "openclip_model" not in kwargs:
             if "model_name" in m_cfg:
                 kwargs["openclip_model"] = m_cfg["model_name"]
+            elif "v3" in str(path):
+                kwargs["openclip_model"] = "ViT-B-16-SigLIP"
             elif "v2" in str(path):
                 kwargs["openclip_model"] = "ViT-B-16"
 
