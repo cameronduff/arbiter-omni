@@ -37,7 +37,9 @@ from arbiter_omni.data.gqa import load_gqa_dataset, _make_mock_gqa_samples
 from arbiter_omni.data.robotics import generate_robotics_samples
 from arbiter_omni.data.scienceqa import load_scienceqa_dataset, create_mock_scienceqa_samples
 from arbiter_omni.data.seedbench import load_seedbench_dataset, create_mock_seedbench_samples
-from arbiter_omni.types import MultimodalSample
+from arbiter_omni.fusion.transformer import TransformerMultimodalFusion
+from arbiter_omni.model.decision_head import DynamicDecisionHead
+from arbiter_omni.types import ModalityType, MultimodalSample
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,6 +129,12 @@ def train_v1(
     lr: float = 1e-4,
     save_path: str = "checkpoints/arbiter_omni_v1.pt",
     encoder_type: str = "openclip",
+    model_name: str = "ViT-B-32",
+    hidden_dim: int = 256,
+    num_layers: int = 2,
+    num_heads: int = 4,
+    scoring_dim: int = 256,
+    enable_cross_attention: bool = False,
     use_mock_data: bool = False,
     device_name: str | None = None,
     cache_embeddings: bool = True,
@@ -138,23 +146,49 @@ def train_v1(
     gqa_samples: int = 2000,
     seedbench_samples: int = 100,
 ) -> str:
-    """Executes the v1 checkpoint training pipeline and saves weights."""
+    """Executes the v1/v2 checkpoint training pipeline and saves weights."""
     device = resolve_device(device_name)
     telemetry = get_device_telemetry(device)
     logger.info(f"Training on Device: {telemetry['device']} ({telemetry['gpu_name']})")
 
     # Initialize perception encoder
     if encoder_type == "openclip":
-        logger.info("Initializing OpenCLIP ViT-B-32 backbone (frozen)...")
+        logger.info(f"Initializing OpenCLIP {model_name} backbone (frozen)...")
         try:
-            encoder = OpenCLIPMultimodalEncoder(device=str(device))
+            encoder = OpenCLIPMultimodalEncoder(model_name=model_name, device=str(device))
         except Exception as e:
             logger.warning(f"Could not load OpenCLIP ({e}); falling back to MockMultimodalEncoder.")
             encoder = MockMultimodalEncoder(device=str(device))
     else:
         encoder = MockMultimodalEncoder(device=str(device))
 
-    model = ArbiterOmniModel(encoder=encoder).to(device)
+    modality_dims = {
+        "question": encoder.text_dim,
+        ModalityType.TEXT.value: encoder.text_dim,
+        ModalityType.IMAGE.value: encoder.image_dim,
+        ModalityType.VIDEO.value: encoder.video_dim,
+        ModalityType.AUDIO.value: encoder.audio_dim,
+    }
+    fusion = TransformerMultimodalFusion(
+        modality_dims=modality_dims,
+        hidden_dim=hidden_dim,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        dim_feedforward=hidden_dim * 2,
+        enable_spatial_cross_attention=enable_cross_attention,
+    )
+    decision_head = DynamicDecisionHead(
+        context_dim=hidden_dim,
+        candidate_dim=encoder.text_dim,
+        scoring_dim=scoring_dim,
+    )
+    model = ArbiterOmniModel(
+        encoder=encoder,
+        fusion=fusion,
+        decision_head=decision_head,
+        hidden_dim=hidden_dim,
+        scoring_dim=scoring_dim,
+    ).to(device)
 
     # Audit parameter freezing
     trainable_params = model.trainable_parameters()
@@ -244,12 +278,18 @@ def train_v1(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train ArbiterOmni v1 Checkpoint")
+    parser = argparse.ArgumentParser(description="Train ArbiterOmni Checkpoint")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--save-path", type=str, default="checkpoints/arbiter_omni_v1.pt", help="Checkpoint output path")
     parser.add_argument("--encoder-type", type=str, default="openclip", choices=["openclip", "mock"], help="Encoder type")
+    parser.add_argument("--model-name", type=str, default="ViT-B-32", help="OpenCLIP visual backbone architecture (e.g. ViT-B-32, ViT-B-16)")
+    parser.add_argument("--hidden-dim", type=int, default=256, help="Fusion hidden dimension")
+    parser.add_argument("--num-layers", type=int, default=2, help="Number of fusion transformer layers")
+    parser.add_argument("--num-heads", type=int, default=4, help="Number of attention heads")
+    parser.add_argument("--scoring-dim", type=int, default=256, help="Decision head scoring projection dimension")
+    parser.add_argument("--enable-cross-attention", action="store_true", help="Enable visual spatial cross-attention")
     parser.add_argument("--use-mock-data", action="store_true", help="Use synthetic mock data instead of streaming")
     parser.add_argument("--no-cache", action="store_true", help="Disable embedding pre-caching")
     parser.add_argument("--contrastive-lambda", type=float, default=0.2, help="Weight lambda for contrastive margin loss")
@@ -269,6 +309,12 @@ if __name__ == "__main__":
             lr=args.lr,
             save_path=args.save_path,
             encoder_type=args.encoder_type,
+            model_name=args.model_name,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            scoring_dim=args.scoring_dim,
+            enable_cross_attention=args.enable_cross_attention,
             use_mock_data=args.use_mock_data,
             device_name=args.device,
             cache_embeddings=not args.no_cache,
