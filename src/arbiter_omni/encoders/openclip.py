@@ -198,7 +198,8 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
                 frame_feats = self.encode_image(sampled)  # [num_frames, dim]
                 if self.use_temporal_attention:
                     with torch.no_grad():
-                        pooled = self.temporal_attention(frame_feats)
+                        frame_patches = self.encode_image_patches(sampled)
+                        pooled = self.temporal_attention(frame_feats, patch_features=frame_patches)
                 else:
                     pooled = frame_feats.mean(dim=0)
 

@@ -98,3 +98,53 @@ def test_motion_delta_velocity_projection():
     sim = torch.dot(out_right, out_left).item()
     assert sim < 0.998, f"Motion delta projection failed to separate opposing velocities: sim={sim:.4f}"
 
+
+def test_patch_centroid_flow():
+    from arbiter_omni.encoders.temporal import compute_patch_centroid_flow
+
+    grid_size = 14
+    T = 4
+    # Case A: Object translating horizontally right: patch (7, 2) -> (7, 5) -> (7, 8) -> (7, 11)
+    patches_right = torch.zeros(1, T, grid_size * grid_size, 32)
+    for t in range(T):
+        x = 2 + t * 3
+        y = 7
+        idx = y * grid_size + x
+        patches_right[0, t, idx, :] = 10.0  # high energy at centroid
+
+    vel_right = compute_patch_centroid_flow(patches_right, grid_size=grid_size)
+    assert vel_right.shape == (1, T, 2)
+
+    # dx should be strictly positive for t >= 1
+    assert (vel_right[0, 1:, 0] > 0.05).all(), f"Expected positive dx: {vel_right[0, :, 0]}"
+    # dy should be approximately 0
+    assert torch.allclose(vel_right[0, 1:, 1], torch.zeros(T - 1), atol=1e-3)
+
+    # Case B: Object dropping vertically: patch (2, 7) -> (5, 7) -> (8, 7) -> (11, 7)
+    patches_drop = torch.zeros(1, T, grid_size * grid_size, 32)
+    for t in range(T):
+        y = 2 + t * 3
+        x = 7
+        idx = y * grid_size + x
+        patches_drop[0, t, idx, :] = 10.0
+
+    vel_drop = compute_patch_centroid_flow(patches_drop, grid_size=grid_size)
+    assert (vel_drop[0, 1:, 1] > 0.05).all(), f"Expected positive dy: {vel_drop[0, :, 1]}"
+    assert torch.allclose(vel_drop[0, 1:, 0], torch.zeros(T - 1), atol=1e-3)
+
+
+def test_spatio_temporal_attention_with_patches():
+    attn = SpatioTemporalVideoAttention(embed_dim=64, max_frames=8, num_heads=4, num_layers=1)
+    attn.eval()
+
+    T = 4
+    grid_size = 14
+    frames = torch.randn(1, T, 64)
+    patches = torch.randn(1, T, grid_size * grid_size, 64)
+
+    with torch.no_grad():
+        out = attn(frames, patch_features=patches)
+
+    assert out.shape == (1, 64)
+    assert torch.isclose(out.norm(), torch.tensor(1.0), atol=1e-4)
+
