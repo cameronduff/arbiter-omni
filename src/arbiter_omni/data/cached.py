@@ -3,6 +3,12 @@ ArbiterOmni Pre-Cached Multimodal Dataset.
 Pre-extracts invariant latent representations from frozen multimodal encoders
 (OpenCLIP, CLAP, Temporal Video Attention) once, eliminating redundant vision/audio
 forward passes during training and accelerating training loops by >1,000x.
+
+AO-25: INT8 Dynamic Quantization Support
+Spatial visual patch embeddings and candidate embeddings can be stored in INT8
+format, reducing RAM footprint by ~60% (from float32 @ 4 bytes/element to INT8
+@ 1 byte/element), enabling larger effective batch sizes within system RAM limits.
+Uses symmetric per-tensor dynamic quantization (scale derived from abs-max).
 """
 
 from __future__ import annotations
@@ -19,8 +25,51 @@ from arbiter_omni.types import ModalityType, MultimodalSample
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# INT8 Dynamic Quantization Utilities [AO-25]
+# ---------------------------------------------------------------------------
+
+def int8_quantize(tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Symmetrically quantizes a float32 tensor to INT8 with per-tensor scaling.
+
+    Uses the absolute maximum value to derive a symmetric scale factor, then
+    clamps and rounds to the INT8 range [-127, 127] (leaving -128 unused to
+    keep the mapping symmetric). Reduces memory by ~75% vs float32.
+
+    Args:
+        tensor: Input float32 tensor of any shape.
+
+    Returns:
+        q_tensor: Quantized INT8 tensor (same shape, dtype=torch.int8).
+        scale:    Scalar float32 scale factor (q_tensor * scale ≈ tensor).
+    """
+    abs_max = tensor.abs().max().clamp(min=1e-8)
+    scale = abs_max / 127.0
+    q_tensor = (tensor / scale).clamp(-127, 127).round().to(torch.int8)
+    return q_tensor, scale.to(torch.float32)
+
+
+def int8_dequantize(q_tensor: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Dequantizes an INT8 tensor back to float32 using the stored scale factor.
+
+    Args:
+        q_tensor: INT8 quantized tensor of any shape.
+        scale:    Scalar float32 scale factor returned by :func:`int8_quantize`.
+
+    Returns:
+        Reconstructed float32 tensor (same shape as q_tensor).
+    """
+    return q_tensor.to(torch.float32) * scale
+
+
 class CachedSample:
-    """Container holding pre-computed frozen encoder embeddings for a single sample."""
+    """Container holding pre-computed frozen encoder embeddings for a single sample.
+
+    AO-25: When ``use_int8=True``, candidate embeddings and spatial image patches are
+    stored in INT8 format (symmetric per-tensor quantization) reducing RAM usage by
+    ~75% vs float32.  Access via :attr:`candidate_embeds` and :attr:`image_patches`
+    properties — they transparently dequantize to float32 on the fly.
+    """
 
     def __init__(
         self,
@@ -31,14 +80,83 @@ class CachedSample:
         target_idx: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
         image_patches: Optional[torch.Tensor] = None,
+        use_int8: bool = False,
     ):
         self.question_embed = question_embed.detach().cpu()
         self.modality_embeds = {k: v.detach().cpu() for k, v in modality_embeds.items()}
         self.presence_mask = presence_mask
-        self.candidate_embeds = candidate_embeds.detach().cpu()
         self.target_idx = target_idx
         self.metadata = metadata or {}
-        self.image_patches = image_patches.detach().cpu() if image_patches is not None else None
+        self._use_int8 = use_int8
+
+        # ---- Candidate embeddings (optionally INT8) ----
+        cands_cpu = candidate_embeds.detach().cpu()
+        if use_int8 and cands_cpu.numel() > 0:
+            self._candidate_embeds_q, self._candidate_embeds_scale = int8_quantize(cands_cpu)
+            self._candidate_embeds: Optional[torch.Tensor] = None
+        else:
+            self._candidate_embeds = cands_cpu
+            self._candidate_embeds_q = None
+            self._candidate_embeds_scale = None
+
+        # ---- Spatial image patches (optionally INT8) ----
+        if image_patches is not None:
+            patches_cpu = image_patches.detach().cpu()
+            if use_int8 and patches_cpu.numel() > 0:
+                self._image_patches_q, self._image_patches_scale = int8_quantize(patches_cpu)
+                self._image_patches: Optional[torch.Tensor] = None
+            else:
+                self._image_patches = patches_cpu
+                self._image_patches_q = None
+                self._image_patches_scale = None
+        else:
+            self._image_patches = None
+            self._image_patches_q = None
+            self._image_patches_scale = None
+
+    @property
+    def candidate_embeds(self) -> torch.Tensor:
+        """Returns candidate embeddings as float32, dequantizing INT8 if needed."""
+        if self._candidate_embeds_q is not None:
+            return int8_dequantize(self._candidate_embeds_q, self._candidate_embeds_scale)
+        return self._candidate_embeds
+
+    @candidate_embeds.setter
+    def candidate_embeds(self, value: torch.Tensor) -> None:
+        """Allows direct float32 assignment (bypasses quantization for legacy compat)."""
+        self._candidate_embeds = value
+        self._candidate_embeds_q = None
+        self._candidate_embeds_scale = None
+
+    @property
+    def image_patches(self) -> Optional[torch.Tensor]:
+        """Returns spatial image patches as float32, dequantizing INT8 if needed."""
+        if self._image_patches_q is not None:
+            return int8_dequantize(self._image_patches_q, self._image_patches_scale)
+        return self._image_patches
+
+    @image_patches.setter
+    def image_patches(self, value: Optional[torch.Tensor]) -> None:
+        """Allows direct float32 assignment (bypasses quantization for legacy compat)."""
+        self._image_patches = value
+        self._image_patches_q = None
+        self._image_patches_scale = None
+
+    @property
+    def memory_bytes(self) -> int:
+        """Returns approximate resident RAM bytes for this sample's tensors."""
+        total = self.question_embed.nelement() * self.question_embed.element_size()
+        for v in self.modality_embeds.values():
+            total += v.nelement() * v.element_size()
+        if self._candidate_embeds_q is not None:
+            total += self._candidate_embeds_q.nelement() * self._candidate_embeds_q.element_size()
+        elif self._candidate_embeds is not None:
+            total += self._candidate_embeds.nelement() * self._candidate_embeds.element_size()
+        if self._image_patches_q is not None:
+            total += self._image_patches_q.nelement() * self._image_patches_q.element_size()
+        elif self._image_patches is not None:
+            total += self._image_patches.nelement() * self._image_patches.element_size()
+        return total
 
 
 
@@ -65,9 +183,18 @@ class CachedMultimodalDataset(Dataset):
         batch_size: int = 32,
         device: Optional[torch.device] = None,
         verbose: bool = True,
+        use_int8: bool = False,
     ) -> CachedMultimodalDataset:
-        """
-        Pre-computes and caches frozen embeddings for all samples in a MultimodalDecisionDataset.
+        """Pre-computes and caches frozen embeddings for all samples in a MultimodalDecisionDataset.
+
+        Args:
+            dataset: Source multimodal decision dataset.
+            model: ArbiterOmniModel instance (frozen encoders).
+            batch_size: Encoding batch size.
+            device: Inference device (defaults to model.device).
+            verbose: Log progress to logger.
+            use_int8: [AO-25] Store candidate embeddings and image patches in INT8
+                format to reduce RAM footprint by ~75% vs float32.
         """
         dev = device or model.device
         model.eval()
@@ -140,6 +267,7 @@ class CachedMultimodalDataset(Dataset):
                             target_idx=targ,
                             metadata=meta[i] if i < len(meta) else {},
                             image_patches=s_patches,
+                            use_int8=use_int8,
                         )
                     )
 
@@ -150,6 +278,11 @@ class CachedMultimodalDataset(Dataset):
         if verbose:
             logger.info(f"✅ Pre-caching complete! {len(cached_samples)} samples in memory.")
         return cls(cached_samples)
+
+    @property
+    def total_memory_mb(self) -> float:
+        """Returns approximate total RAM occupied by all cached sample tensors in MB."""
+        return sum(s.memory_bytes for s in self.samples) / (1024.0 * 1024.0)
 
     def save(self, path: str) -> None:
         """Serializes pre-cached dataset tensors to disk."""

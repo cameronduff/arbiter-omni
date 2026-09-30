@@ -9,7 +9,10 @@ from arbiter_omni.calibration.conformal import (
 )
 from arbiter_omni.data.cached import (
     CachedMultimodalDataset,
+    CachedSample,
     collate_cached_multimodal_decision,
+    int8_quantize,
+    int8_dequantize,
 )
 from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
@@ -69,6 +72,7 @@ __all__ = [
     "MockMultimodalEncoder",
     "ModalityType",
     "MultimodalDecisionDataset",
+    "CachedSample",
     "MultimodalSample",
     "OpenCLIPMultimodalEncoder",
     "PersistentMemoryBank",
@@ -81,6 +85,8 @@ __all__ = [
     "collate_multimodal_decision",
     "configure_cpu_threads",
     "contrastive_margin_loss",
+    "int8_quantize",
+    "int8_dequantize",
 
     "create_synthetic_audio",
     "create_synthetic_image",

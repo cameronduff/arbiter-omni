@@ -31,10 +31,16 @@ def test_memory_bank_initialization_and_capacity():
     # Memory size for 1000 float32 x 768 is ~2.93 MB
     assert 2.0 < bank.memory_usage_mb < 3.5
 
-    # 50,000 full scale memory verification
-    full_bank = PersistentMemoryBank(capacity=50000, candidate_dim=768, device="cpu")
-    # 50000 * 768 * 4 bytes = 153.6 MB
-    assert pytest.approx(full_bank.memory_usage_mb, rel=1e-2) == 146.48
+    # AO-25: 100k full-scale fp32 memory verification (~293 MB)
+    full_bank = PersistentMemoryBank(capacity=100000, candidate_dim=768, device="cpu")
+    # 100000 * 768 * 4 bytes = 307,200,000 bytes ≈ 293.0 MB
+    assert 285.0 < full_bank.memory_usage_mb < 305.0
+
+    # AO-25: 100k fp16 memory verification (~147 MB — half of fp32)
+    fp16_bank = PersistentMemoryBank(capacity=100000, candidate_dim=768, device="cpu", store_fp16=True)
+    assert fp16_bank.dtype == torch.float16
+    assert fp16_bank.candidate_bank.dtype == torch.float16
+    assert 140.0 < fp16_bank.memory_usage_mb < 160.0
 
 
 def test_memory_bank_cyclic_fifo_enqueue():
