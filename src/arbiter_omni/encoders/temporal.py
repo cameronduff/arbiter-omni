@@ -57,6 +57,11 @@ class SpatioTemporalVideoAttention(nn.Module):
         # Learned summary query token [VIDEO_SUMMARY]
         self.summary_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
 
+        # Inter-frame motion velocity projection: projects ΔF_t = F_{t+1} - F_t
+        self.motion_proj = nn.Linear(embed_dim, embed_dim)
+        nn.init.zeros_(self.motion_proj.bias)
+        nn.init.xavier_uniform_(self.motion_proj.weight)
+
         # Temporal Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -103,6 +108,14 @@ class SpatioTemporalVideoAttention(nn.Module):
         # Add temporal positional embeddings
         pos = self.pos_embed[:, :T, :].to(device)
         x = frame_features + pos
+
+        # Inject inter-frame motion delta vectors: ΔF_t = F_{t+1} - F_t
+        if T >= 2:
+            deltas = frame_features[:, 1:, :] - frame_features[:, :-1, :]  # [B, T-1, D]
+            motion_tokens = self.motion_proj(deltas)
+            zero_motion = torch.zeros(B, 1, D, device=device)
+            motion_features = torch.cat([zero_motion, motion_tokens], dim=1)  # [B, T, D]
+            x = x + motion_features
 
         # Prepend [VIDEO_SUMMARY] token
         summary = self.summary_token.expand(B, -1, -1).to(device)

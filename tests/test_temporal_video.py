@@ -76,3 +76,25 @@ def test_video_file_decoding(tmp_path):
     assert emb.shape == (1, encoder.video_dim)
     assert torch.isclose(emb.norm(), torch.tensor(1.0), atol=1e-4)
 
+
+def test_motion_delta_velocity_projection():
+    attn = SpatioTemporalVideoAttention(embed_dim=64, max_frames=8, num_heads=4, num_layers=1)
+    attn.eval()
+
+    # Create synthetic linear motion: frame_t = base + t * velocity
+    base = torch.randn(1, 64)
+    vel_right = torch.ones(1, 64) * 0.5
+    vel_left = -torch.ones(1, 64) * 0.5
+
+    frames_right = torch.cat([base + i * vel_right for i in range(5)], dim=0) # [5, 64]
+    frames_left = torch.cat([base + i * vel_left for i in range(5)], dim=0)   # [5, 64]
+
+    with torch.no_grad():
+        out_right = attn(frames_right)
+        out_left = attn(frames_left)
+
+    # Opposite motion vectors should yield distinct embeddings
+    assert not torch.allclose(out_right, out_left, atol=1e-3)
+    sim = torch.dot(out_right, out_left).item()
+    assert sim < 0.998, f"Motion delta projection failed to separate opposing velocities: sim={sim:.4f}"
+
