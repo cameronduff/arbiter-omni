@@ -56,9 +56,13 @@ class ArbiterOmniEngine:
         encoder_type: str = "mock",
         hidden_dim: int = 256,
         scoring_dim: int = 256,
+        num_layers: int = 2,
+        num_heads: int = 4,
+        enable_spatial_cross_attention: bool = False,
         openclip_model: str = "ViT-B-32",
         pretrained_dataset: Optional[str] = None,
         device: Optional[Union[str, torch.device]] = None,
+        **kwargs,
     ) -> ArbiterOmniEngine:
         """
         Factory constructor for ArbiterOmniEngine.
@@ -67,6 +71,9 @@ class ArbiterOmniEngine:
             encoder_type: 'mock' for lightweight instant testing, or 'openclip' for production CLIP.
             hidden_dim: Fusion latent dimension.
             scoring_dim: Decision interaction dimension.
+            num_layers: Number of transformer fusion layers.
+            num_heads: Number of attention heads.
+            enable_spatial_cross_attention: Enable question-conditioned spatial cross attention.
             openclip_model: OpenCLIP architecture name ('ViT-B-32' or 'ViT-B-16').
             pretrained_dataset: Optional OpenCLIP checkpoint tag (auto-resolved if None).
             device: Optional torch device.
@@ -86,6 +93,10 @@ class ArbiterOmniEngine:
             encoder=encoder,
             hidden_dim=hidden_dim,
             scoring_dim=scoring_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            enable_spatial_cross_attention=enable_spatial_cross_attention,
+            **kwargs,
         )
         return cls(model=model, device=dev)
 
@@ -108,11 +119,12 @@ class ArbiterOmniEngine:
         dev = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         path = checkpoint_name_or_path
-        if path == "v1":
+        if path in ("v1", "v2"):
+            tag_name = f"arbiter_omni_{path}.pt"
             candidates = [
-                "checkpoints/arbiter_omni_v1.pt",
-                os.path.join(os.path.dirname(__file__), "..", "..", "..", "checkpoints", "arbiter_omni_v1.pt"),
-                os.path.join(os.getcwd(), "checkpoints", "arbiter_omni_v1.pt"),
+                f"checkpoints/{tag_name}",
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "checkpoints", tag_name),
+                os.path.join(os.getcwd(), "checkpoints", tag_name),
             ]
             for cand in candidates:
                 if os.path.exists(cand):
@@ -122,8 +134,62 @@ class ArbiterOmniEngine:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Checkpoint '{checkpoint_name_or_path}' could not be resolved at path: {path}. "
-                "Ensure checkpoints/arbiter_omni_v1.pt exists or run scripts/train_v1.py."
+                "Ensure checkpoints/arbiter_omni_v1.pt (or v2) exists or run scripts/train_v1.py."
             )
+
+        # Inspect checkpoint for architectural parameters if present
+        try:
+            try:
+                raw_ckpt = torch.load(path, map_location="cpu", weights_only=False)
+            except TypeError:
+                raw_ckpt = torch.load(path, map_location="cpu")
+            m_cfg = raw_ckpt.get("model_config", {}) if isinstance(raw_ckpt, dict) else {}
+            fusion_sd = raw_ckpt.get("fusion", {}) if isinstance(raw_ckpt, dict) else {}
+            head_sd = raw_ckpt.get("decision_head", {}) if isinstance(raw_ckpt, dict) else {}
+        except Exception:
+            m_cfg = {}
+            fusion_sd = {}
+            head_sd = {}
+
+        if "hidden_dim" not in kwargs:
+            if "hidden_dim" in m_cfg:
+                kwargs["hidden_dim"] = m_cfg["hidden_dim"]
+            elif "projections.question.0.weight" in fusion_sd:
+                kwargs["hidden_dim"] = fusion_sd["projections.question.0.weight"].shape[0]
+
+        if "scoring_dim" not in kwargs:
+            if "scoring_dim" in m_cfg:
+                kwargs["scoring_dim"] = m_cfg["scoring_dim"]
+            elif "scoring_net.0.weight" in head_sd:
+                kwargs["scoring_dim"] = head_sd["scoring_net.0.weight"].shape[0]
+
+        if "num_layers" not in kwargs:
+            if "num_layers" in m_cfg:
+                kwargs["num_layers"] = m_cfg["num_layers"]
+            else:
+                layer_indices = [
+                    int(k.split(".")[2])
+                    for k in fusion_sd.keys()
+                    if k.startswith("transformer.layers.") and k.split(".")[2].isdigit()
+                ]
+                if layer_indices:
+                    kwargs["num_layers"] = max(layer_indices) + 1
+
+        if "num_heads" not in kwargs:
+            if "num_heads" in m_cfg:
+                kwargs["num_heads"] = m_cfg["num_heads"]
+
+        if "enable_spatial_cross_attention" not in kwargs:
+            if "enable_spatial_cross_attention" in m_cfg:
+                kwargs["enable_spatial_cross_attention"] = m_cfg["enable_spatial_cross_attention"]
+            elif any(k.startswith("spatial_cross_attn") for k in fusion_sd.keys()):
+                kwargs["enable_spatial_cross_attention"] = True
+
+        if "openclip_model" not in kwargs:
+            if "model_name" in m_cfg:
+                kwargs["openclip_model"] = m_cfg["model_name"]
+            elif "v2" in str(path):
+                kwargs["openclip_model"] = "ViT-B-16"
 
         engine = cls.create(encoder_type=encoder_type, device=dev, **kwargs)
         engine.load_weights(path)
@@ -131,7 +197,10 @@ class ArbiterOmniEngine:
 
     def load_weights(self, weights_path: str):
         """Loads trained fusion and decision head weights."""
-        checkpoint = torch.load(weights_path, map_location=self.device)
+        try:
+            checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(weights_path, map_location=self.device)
         if "fusion" in checkpoint and "decision_head" in checkpoint:
             self.model.fusion.load_state_dict(checkpoint["fusion"], strict=False)
             self.model.decision_head.load_state_dict(checkpoint["decision_head"], strict=False)
