@@ -4,6 +4,7 @@ Transformer-based Multimodal Fusion with Modality-Type Embeddings and Missing-Mo
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
@@ -64,7 +65,8 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         self.decision_query = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
 
         # Spatial 2D patch positional embeddings for fine-grained visual grounding
-        self.max_spatial_patches = 196
+        # Supports multi-scale tiling (1 global overview + 4 quadrant tiles = up to 980 patches)
+        self.max_spatial_patches = 980
         self.spatial_pos_embed = nn.Parameter(torch.randn(1, 196, hidden_dim) * 0.02)
 
         # Optional Question-Conditioned Cross-Attention over visual spatial patches
@@ -149,13 +151,16 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             # PyTorch key_padding_mask: True indicates element should be IGNORED (masked out)
             mask_list.append((~is_present).unsqueeze(1))
 
-        # Spatial Visual Patch Tokens (Fine-Grained Visual Grounding)
+        # Spatial Visual Patch Tokens (Fine-Grained Visual Grounding & Dynamic Multi-Scale Tiling)
         if image_patches is not None and image_patches.numel() > 0:
             P = min(image_patches.size(1), self.max_spatial_patches)
             valid_patches = image_patches[:, :P, :]
             # Project patches through image projection layers
             patch_proj = self.projections["image"](valid_patches)  # [B, P, hidden_dim]
-            patch_pos = self.spatial_pos_embed[:, :P, :].to(device)
+
+            # Multi-scale positional embeddings: repeat coordinate grid across tiles
+            repeats = math.ceil(P / 196) if P > 196 else 1
+            patch_pos = self.spatial_pos_embed.repeat(1, repeats, 1)[:, :P, :].to(device)
             patch_type = self.modality_type_embed(torch.tensor(3, device=device))
             patch_tokens = patch_proj + patch_pos + patch_type
 

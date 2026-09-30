@@ -175,6 +175,32 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
                 patch_tokens = pooled.unsqueeze(1)
         return patch_tokens
 
+    def encode_tiled_image_patches(self, images: Sequence[Any], force_tiling: bool = False) -> torch.Tensor:
+        """
+        Extracts multi-scale spatial patch tokens (1 global overview + 4 quadrant tiles = up to 980 patches)
+        for high-resolution photos and diagrams.
+        
+        Returns:
+            [B, total_P, D] tensor where total_P is up to 980 spatial patch tokens.
+        """
+        from arbiter_omni.encoders.tiling import DynamicImageTiler
+        tiler = DynamicImageTiler()
+        batch_tiled_patches = []
+        for img in images:
+            tiles = tiler.tile_image(img, force_tiling=force_tiling)
+            tile_patches = self.encode_image_patches(tiles) # [num_tiles, 196, D]
+            concatenated = tile_patches.reshape(1, tile_patches.shape[0] * tile_patches.shape[1], -1)
+            batch_tiled_patches.append(concatenated)
+
+        max_P = max(tp.shape[1] for tp in batch_tiled_patches)
+        B = len(images)
+        D = batch_tiled_patches[0].shape[-1]
+        output = torch.zeros((B, max_P, D), device=self.device)
+        for i, tp in enumerate(batch_tiled_patches):
+            p_len = tp.shape[1]
+            output[i, :p_len, :] = tp[0]
+        return output
+
 
     def encode_video(
         self,

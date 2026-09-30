@@ -216,3 +216,62 @@ def test_cached_dataset_and_trainer_with_spatial_patches():
     assert "loss" in history
     assert len(history["loss"]) == 2
     assert history["val_accuracy"][-1] >= 0.0
+
+
+def test_dynamic_image_tiler_resolutions():
+    """Validates DynamicImageTiler for standard and high-resolution images."""
+    from arbiter_omni.encoders.tiling import DynamicImageTiler
+
+    tiler = DynamicImageTiler(min_dim_for_tiling=336, target_tile_size=224)
+
+    # 1. Standard low-res image (224x224) -> 1 global tile
+    small_img = Image.new("RGB", (224, 224), color=(100, 100, 100))
+    tiles_small = tiler.tile_image(small_img)
+    assert len(tiles_small) == 1
+    assert tiles_small[0].size == (224, 224)
+
+    # 2. High-res image (896x896) -> 5 tiles (1 global + 4 quadrants)
+    high_res_img = Image.new("RGB", (896, 896), color=(200, 50, 50))
+    tiles_high = tiler.tile_image(high_res_img)
+    assert len(tiles_high) == 5
+    for t in tiles_high:
+        assert t.size == (224, 224)
+
+    # 3. Force tiling on small image
+    tiles_forced = tiler.tile_image(small_img, force_tiling=True)
+    assert len(tiles_forced) == 5
+
+
+def test_transformer_fusion_multi_scale_tiled_patches():
+    """Validates TransformerMultimodalFusion handles 980 multi-scale spatial patch tokens (5 tiles x 196)."""
+    modality_dims = {
+        "question": 64,
+        ModalityType.TEXT.value: 64,
+        ModalityType.IMAGE.value: 64,
+        ModalityType.VIDEO.value: 64,
+        ModalityType.AUDIO.value: 64,
+    }
+    fusion = TransformerMultimodalFusion(
+        modality_dims=modality_dims,
+        hidden_dim=128,
+        enable_spatial_cross_attention=True,
+    )
+    fusion.eval()
+
+    B = 2
+    P = 980  # 5 tiles x 196 patches
+    q_embed = torch.randn(B, 64)
+    mod_embeds = {ModalityType.IMAGE: torch.randn(B, 64)}
+    presence = {ModalityType.IMAGE: torch.ones(B, dtype=torch.bool)}
+    tiled_patches = torch.randn(B, P, 64)
+
+    with torch.no_grad():
+        fused = fusion(
+            question_embed=q_embed,
+            modality_embeds=mod_embeds,
+            presence_mask=presence,
+            image_patches=tiled_patches,
+        )
+
+    assert fused.shape == (B, 128)
+    assert not torch.isnan(fused).any()
