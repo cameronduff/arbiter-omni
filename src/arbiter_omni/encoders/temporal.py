@@ -26,13 +26,21 @@ def _build_sinusoidal_pos_embed(seq_len: int, embed_dim: int) -> torch.Tensor:
     return pe
 
 
-def compute_patch_centroid_flow(patch_features: torch.Tensor, grid_size: int = 14) -> torch.Tensor:
+def compute_patch_centroid_flow(
+    patch_features: torch.Tensor,
+    grid_size: int = 14,
+    long_stride: int = 4,
+    blend_ratio: float = 0.4,
+) -> torch.Tensor:
     """
-    Computes universal (dx, dy) spatial centroid velocity vectors across video frames.
+    Computes universal (dx, dy) spatial centroid velocity vectors across video frames,
+    combining instant single-frame velocity (stride 1) and long-range trajectory flow (stride k).
     
     Args:
         patch_features: [B, T, P, D] or [T, P, D] unpooled patch embeddings (P = grid_size * grid_size).
         grid_size: Spatial grid dimension (default 14 for 196 patches).
+        long_stride: Frame stride for long-range trajectory tracking (default 4).
+        blend_ratio: Weight for long-range velocity component in [0.0, 1.0].
         
     Returns:
         velocities: [B, T, 2] continuous (dx, dy) velocity vectors per frame, normalized [-1, 1].
@@ -75,8 +83,16 @@ def compute_patch_centroid_flow(patch_features: torch.Tensor, grid_size: int = 1
     dx = torch.zeros(B, T, device=device)
     dy = torch.zeros(B, T, device=device)
     if T >= 2:
-        dx[:, 1:] = cx[:, 1:] - cx[:, :-1]
-        dy[:, 1:] = cy[:, 1:] - cy[:, :-1]
+        dx_short = cx[:, 1:] - cx[:, :-1]
+        dy_short = cy[:, 1:] - cy[:, :-1]
+        dx[:, 1:] = dx_short
+        dy[:, 1:] = dy_short
+
+        if T > long_stride and blend_ratio > 0.0:
+            dx_long = (cx[:, long_stride:] - cx[:, :-long_stride]) / float(long_stride)
+            dy_long = (cy[:, long_stride:] - cy[:, :-long_stride]) / float(long_stride)
+            dx[:, long_stride:] = (1.0 - blend_ratio) * dx[:, long_stride:] + blend_ratio * dx_long
+            dy[:, long_stride:] = (1.0 - blend_ratio) * dy[:, long_stride:] + blend_ratio * dy_long
 
     velocities = torch.stack([dx, dy], dim=-1)  # [B, T, 2]
     if is_unbatched:
@@ -86,19 +102,19 @@ def compute_patch_centroid_flow(patch_features: torch.Tensor, grid_size: int = 1
 
 class SpatioTemporalVideoAttention(nn.Module):
     """
-    Spatio-Temporal Video Attention Transformer.
+    Spatio-Temporal Video Attention Transformer with Dense Multi-Frame Support (up to 64 frames).
     
     Processes a sequence of T frame feature embeddings [B, T, D] extracted by a visual
-    backbone (e.g. ViT-B-32). Enriches each frame with chronological positional
+    backbone (e.g. SigLIP / ViT-B-16). Enriches each frame with chronological positional
     embeddings and processes cross-frame dependencies via temporal self-attention.
-    Outputs a normalized 512-dim video summary token capturing sequence dynamics,
-    speed, and action direction.
+    Outputs a normalized video summary token capturing sequence dynamics, speed,
+    multi-stride trajectories, and action direction.
     """
 
     def __init__(
         self,
         embed_dim: int = 512,
-        max_frames: int = 32,
+        max_frames: int = 64,
         num_heads: int = 8,
         num_layers: int = 2,
         dim_feedforward: int = 1024,
@@ -140,6 +156,22 @@ class SpatioTemporalVideoAttention(nn.Module):
         )
 
         self.norm = nn.LayerNorm(embed_dim)
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        """Allows loading from checkpoints with different max_frames (e.g. 32 -> 64)."""
+        pe_key = prefix + "pos_embed"
+        if pe_key in state_dict:
+            saved_pe = state_dict[pe_key]
+            if saved_pe.shape != self.pos_embed.shape:
+                new_pe = self.pos_embed.clone()
+                min_len = min(saved_pe.shape[1], new_pe.shape[1])
+                new_pe[:, :min_len, :] = saved_pe[:, :min_len, :]
+                state_dict[pe_key] = new_pe
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
 
     def forward(
         self,

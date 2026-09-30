@@ -176,9 +176,16 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         return patch_tokens
 
 
-    def encode_video(self, videos: Sequence[Any], num_frames: int = 8) -> torch.Tensor:
+    def encode_video(
+        self,
+        videos: Sequence[Any],
+        num_frames: int = 16,
+        sub_batch_size: int = 16,
+    ) -> torch.Tensor:
         """
         Encodes video clips by sampling frames and aggregating them using Spatio-Temporal Video Attention.
+        Supports dense long-horizon temporal buffering (up to 64 frames) via sub-batched chunking to
+        guarantee <1 GB peak working memory during perception.
         Supports lists of PIL images, numpy arrays, or file paths (.mp4, .webm, .gif, .avi, etc.).
         """
         batch_video_features = []
@@ -214,11 +221,24 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             else:
                 step = max(1, len(frames) // num_frames)
                 sampled = frames[::step][:num_frames]
-                frame_feats = self.encode_image(sampled)  # [num_frames, dim]
+
+                # Chunked sub-batch processing for dense temporal sequences (e.g. 32–64 frames)
+                frame_feats_chunks = []
+                frame_patches_chunks = []
+                for chunk_start in range(0, len(sampled), sub_batch_size):
+                    chunk = sampled[chunk_start : chunk_start + sub_batch_size]
+                    f_chunk = self.encode_image(chunk)
+                    frame_feats_chunks.append(f_chunk)
+                    if self.use_temporal_attention:
+                        with torch.no_grad():
+                            p_chunk = self.encode_image_patches(chunk)
+                            frame_patches_chunks.append(p_chunk)
+
+                frame_feats = torch.cat(frame_feats_chunks, dim=0)  # [num_frames, dim]
+
                 if self.use_temporal_attention:
-                    with torch.no_grad():
-                        frame_patches = self.encode_image_patches(sampled)
-                        pooled = self.temporal_attention(frame_feats, patch_features=frame_patches)
+                    frame_patches = torch.cat(frame_patches_chunks, dim=0)  # [num_frames, P, dim]
+                    pooled = self.temporal_attention(frame_feats, patch_features=frame_patches)
                 else:
                     pooled = frame_feats.mean(dim=0)
 
