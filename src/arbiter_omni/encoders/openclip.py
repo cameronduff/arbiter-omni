@@ -1,6 +1,12 @@
 """
 OpenCLIP Multimodal Pretrained Encoder with Advanced Extensions.
 Encodes Text, Images, Video (via Spatio-Temporal Video Attention), and Audio (via CLAP).
+
+AO-26: SigLIP-SO400M Integration
+Adds support for ViT-SO400M-14-SigLIP-384 (1152-dim, 435M parameters), Google's largest
+SigLIP backbone. At 435M parameters it exceeds the 4 GB GDDR5 VRAM budget when combined
+with the 64-frame temporal attention pipeline, so it is automatically offloaded to CPU
+shared RAM (8 GB DDR4 pool) while keeping the lightweight fusion+head on GPU.
 """
 
 from __future__ import annotations
@@ -16,11 +22,23 @@ from arbiter_omni.encoders.clap import CLAPAudioEncoder
 from arbiter_omni.encoders.temporal import SpatioTemporalVideoAttention
 
 
+# SO400M: 435M param SigLIP backbone with 1152-dim output and 384×384 input resolution
+_SO400M_NAME = "ViT-SO400M-14-SigLIP-384"
+_SO400M_DIM = 1152
+# Threshold: models with weight count above this trigger automatic CPU offload to shared RAM
+_CPU_OFFLOAD_PARAM_THRESHOLD = 200_000_000  # 200M params
+
+
 class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     """
-    Multimodal encoder backed by OpenCLIP (e.g. ViT-B-32).
-    Maps text, images, video frame sequences, and audio into a 512-dimensional joint vector space.
+    Multimodal encoder backed by OpenCLIP.
+    Maps text, images, video frame sequences, and audio into a joint vector space.
     Employs Spatio-Temporal Video Attention for video sequences and CLAP for audio.
+
+    AO-26: Supports ViT-SO400M-14-SigLIP-384 (1152-dim, 435M parameters).
+    Large backbones (>200M params) are automatically offloaded to CPU shared RAM
+    to prevent VRAM OOM on the RX 480 (4 GB GDDR5) while keeping the fusion
+    and decision head on GPU.
     """
 
     def __init__(
@@ -31,13 +49,17 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         enable_clap_weights: bool = False,
         use_temporal_attention: bool = True,
         max_frames: int = 64,
+        cpu_offload_encoder: bool = False,
     ):
         super().__init__(device=device)
         self.model_name = model_name
         self.max_frames = max_frames
 
-        # Auto-resolve pretrained dataset tag if not specified or default is passed
-        if "siglip" in model_name.lower():
+        # ---- AO-26: Pretrained tag auto-resolution ----
+        is_siglip = "siglip" in model_name.lower()
+        is_so400m = _SO400M_NAME.lower() in model_name.lower() or "so400m" in model_name.lower()
+
+        if is_siglip or is_so400m:
             if pretrained is None or pretrained.startswith("laion"):
                 pretrained = "webli"
         elif pretrained is None or pretrained == "laion2b_s34b_b79k":
@@ -56,20 +78,42 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
 
         import open_clip
 
+        # AO-26: Load model initially on CPU so we can count params before deciding
+        # where to place it (avoids OOM from loading 435M param SO400M directly to VRAM)
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            model_name, pretrained=pretrained, device=self.device
+            model_name, pretrained=pretrained, device="cpu"
         )
         self.tokenizer = open_clip.get_tokenizer(model_name)
-        visual_dim = getattr(self.model, "visual", None)
-        text_dim = getattr(self.model, "text", None)
-        if visual_dim is not None and getattr(visual_dim, "output_dim", None) is not None:
-            self._dim = visual_dim.output_dim
-        elif text_dim is not None and getattr(text_dim, "output_dim", None) is not None:
-            self._dim = text_dim.output_dim
+
+        # ---- Resolve output embedding dimension ----
+        visual_mod = getattr(self.model, "visual", None)
+        text_mod = getattr(self.model, "text", None)
+        if is_so400m:
+            # SO400M always outputs 1152-dim regardless of open_clip output_dim reporting
+            self._dim = _SO400M_DIM
+        elif visual_mod is not None and getattr(visual_mod, "output_dim", None) is not None:
+            self._dim = visual_mod.output_dim
+        elif text_mod is not None and getattr(text_mod, "output_dim", None) is not None:
+            self._dim = text_mod.output_dim
         else:
-            self._dim = 768 if "siglip" in model_name.lower() else 512
+            self._dim = 768 if is_siglip else 512
+
+        # ---- AO-26: CPU offload decision ----
+        # Count total backbone params; automatically offload large models (>200M)
+        # to CPU shared RAM (8 GB DDR4) to avoid exhausting the 4 GB GDDR5 VRAM budget.
+        total_params = sum(p.numel() for p in self.model.parameters())
+        self._encoder_on_cpu = cpu_offload_encoder or (total_params > _CPU_OFFLOAD_PARAM_THRESHOLD)
+
+        if self._encoder_on_cpu:
+            # Backbone stays on CPU shared RAM; fusion+head live on GPU
+            self._encoder_device = torch.device("cpu")
+        else:
+            # Smaller backbones (ViT-B/L) fit in VRAM alongside the fusion network
+            self._encoder_device = self.device
+            self.model = self.model.to(self._encoder_device)
 
         # Temporal Video Attention Transformer (64-frame dense long horizon)
+        # Always resides on main device for GPU-accelerated temporal pooling
         self.temporal_attention = SpatioTemporalVideoAttention(
             embed_dim=self._dim, max_frames=max_frames, num_heads=8
         ).to(self.device)
@@ -110,21 +154,47 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
     def audio_dim(self) -> int:
         return self._dim
 
+    @property
+    def encoder_param_count(self) -> int:
+        """Returns total trainable + frozen parameter count for the vision-language backbone."""
+        return sum(p.numel() for p in self.model.parameters())
+
+    @property
+    def is_cpu_offloaded(self) -> bool:
+        """Returns True if the backbone is resident in CPU shared RAM (SO400M offload mode)."""
+        return getattr(self, "_encoder_on_cpu", False)
+
+    @property
+    def backbone_device(self) -> torch.device:
+        """Returns the device where backbone parameters reside (cpu or cuda/directml)."""
+        return getattr(self, "_encoder_device", self.device)
+
     def encode_text(self, texts: Sequence[str]) -> torch.Tensor:
-        """Embeds text prompts, questions, or candidate decisions."""
-        dev = self.device
-        try:
-            dev = next(self.model.parameters()).device
-        except (StopIteration, AttributeError):
-            pass
-        tokens = self.tokenizer(list(texts)).to(dev)
+        """Embeds text prompts, questions, or candidate decisions.
+
+        AO-26: Routes tokens to ``_encoder_device`` (CPU for large backbones like SO400M),
+        then returns features on ``self.device`` so downstream fusion stays on GPU.
+        """
+        enc_dev = getattr(self, "_encoder_device", None)
+        if enc_dev is None:
+            # Fallback: infer from model parameters (backward compat)
+            try:
+                enc_dev = next(self.model.parameters()).device
+            except (StopIteration, AttributeError):
+                enc_dev = self.device
+        tokens = self.tokenizer(list(texts)).to(enc_dev)
         with torch.no_grad():
             features = self.model.encode_text(tokens)
             features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
-        return features
+        return features.to(self.device)
 
     def encode_image(self, images: Sequence[Any]) -> torch.Tensor:
-        """Embeds single images or keyframes."""
+        """Embeds single images or keyframes.
+
+        AO-26: Sends preprocessed batch to ``_encoder_device`` (CPU for large backbones)
+        and returns normalized features on ``self.device``.
+        """
+        enc_dev = getattr(self, "_encoder_device", self.device)
         processed_tensors = []
         for img in images:
             if isinstance(img, str):
@@ -135,11 +205,11 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
                 img = Image.new("RGB", (224, 224), color=(128, 128, 128))
             processed_tensors.append(self.preprocess(img))
 
-        batch = torch.stack(processed_tensors).to(self.device)
+        batch = torch.stack(processed_tensors).to(enc_dev)
         with torch.no_grad():
             features = self.model.encode_image(batch)
             features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
-        return features
+        return features.to(self.device)
 
     def encode_image_patches(self, images: Sequence[Any]) -> torch.Tensor:
         """
@@ -148,6 +218,7 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             [B, P, image_dim] tensor of normalized patch embeddings
             (P = 49 for ViT-B-32 [7x7 grid], P = 196 for ViT-B-16 [14x14 grid]).
         """
+        enc_dev = getattr(self, "_encoder_device", self.device)
         processed_tensors = []
         for img in images:
             if isinstance(img, str):
@@ -158,7 +229,7 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
                 img = Image.new("RGB", (224, 224), color=(128, 128, 128))
             processed_tensors.append(self.preprocess(img))
 
-        batch = torch.stack(processed_tensors).to(self.device)
+        batch = torch.stack(processed_tensors).to(enc_dev)
         with torch.no_grad():
             visual = getattr(self.model, "visual", None)
             if visual is not None and hasattr(visual, "_embeds") and hasattr(visual, "transformer"):
@@ -180,7 +251,7 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             else:
                 pooled = self.encode_image(images)
                 patch_tokens = pooled.unsqueeze(1)
-        return patch_tokens
+        return patch_tokens.to(self.device)
 
     def encode_tiled_image_patches(self, images: Sequence[Any], force_tiling: bool = False) -> torch.Tensor:
         """
