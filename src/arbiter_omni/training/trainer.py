@@ -373,6 +373,7 @@ class ArbiterOmniTrainer:
                 "num_layers": getattr(fusion_mod, "num_layers", 2),
                 "scoring_dim": getattr(self.model.decision_head, "scoring_dim", 256),
                 "model_name": getattr(self.model.encoder, "model_name", "ViT-B-32"),
+                "enable_spatial_cross_attention": getattr(fusion_mod, "enable_spatial_cross_attention", False),
             },
         }
         torch.save(state, path)

@@ -141,6 +141,7 @@ def train_v1(
     contrastive_lambda: float = 0.2,
     margin_gamma: float = 0.5,
     mine_hard_negatives: bool = False,
+    accumulate_grad_batches: int = 1,
     scienceqa_samples: int = 2000,
     ai2d_samples: int = 500,
     gqa_samples: int = 2000,
@@ -241,13 +242,33 @@ def train_v1(
         logger.info(f"Augmented train dataset with mined hard negatives (size: {len(train_dataset)})")
 
     if cache_embeddings:
-        logger.info("⚡ Pre-caching frozen representations into memory (bypassing frozen encoders during epochs)...")
-        train_dataset = CachedMultimodalDataset.from_dataset(
-            train_dataset, model=model, batch_size=batch_size, device=device
-        )
-        val_dataset = CachedMultimodalDataset.from_dataset(
-            val_dataset, model=model, batch_size=batch_size, device=device
-        )
+        cache_tag = f"checkpoints/cache_{model_name.replace('/', '_')}_{train_sqa}_{train_ai2d}_{train_gqa}_{train_seed}"
+        cache_train_path = f"{cache_tag}_train.pt"
+        cache_val_path = f"{cache_tag}_val.pt"
+
+        if os.path.exists(cache_train_path) and os.path.exists(cache_val_path):
+            logger.info(f"⚡ Found existing cached embeddings on disk! Loading from {cache_tag}_*.pt...")
+            train_dataset = CachedMultimodalDataset.load(cache_train_path)
+            val_dataset = CachedMultimodalDataset.load(cache_val_path)
+        else:
+            logger.info("⚡ Pre-caching frozen representations into memory (bypassing frozen encoders during epochs)...")
+            train_dataset = CachedMultimodalDataset.from_dataset(
+                train_dataset, model=model, batch_size=batch_size, device=device
+            )
+            val_dataset = CachedMultimodalDataset.from_dataset(
+                val_dataset, model=model, batch_size=batch_size, device=device
+            )
+            try:
+                train_dataset.save(cache_train_path)
+                val_dataset.save(cache_val_path)
+            except Exception as e:
+                logger.warning(f"Could not persist cached datasets to disk: {e}")
+
+        # Offload frozen encoder to CPU to free ~850 MB GDDR5 VRAM for backward autograd
+        logger.info("🧹 Offloading frozen perception encoder from GPU to CPU to reclaim VRAM for training...")
+        model.encoder.to("cpu")
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
@@ -259,7 +280,7 @@ def train_v1(
         fp16=True,
         save_path=save_path,
         device=str(device),
-        accumulate_grad_batches=1,
+        accumulate_grad_batches=accumulate_grad_batches,
         contrastive_lambda=contrastive_lambda,
         margin_gamma=margin_gamma,
     )
@@ -295,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--contrastive-lambda", type=float, default=0.2, help="Weight lambda for contrastive margin loss")
     parser.add_argument("--margin-gamma", type=float, default=0.5, help="Margin gamma for contrastive loss")
     parser.add_argument("--mine-hard-negatives", action="store_true", help="Mine hard negative candidate foils")
+    parser.add_argument("--accumulate-grad-batches", type=int, default=1, help="Number of gradient accumulation batches")
     parser.add_argument("--device", type=str, default=None, help="Compute device override")
     parser.add_argument("--scienceqa-samples", type=int, default=2000, help="Total ScienceQA samples (train+val)")
     parser.add_argument("--ai2d-samples", type=int, default=500, help="Total AI2D samples (train+val)")
@@ -321,11 +343,15 @@ if __name__ == "__main__":
             contrastive_lambda=args.contrastive_lambda,
             margin_gamma=args.margin_gamma,
             mine_hard_negatives=args.mine_hard_negatives,
+            accumulate_grad_batches=args.accumulate_grad_batches,
             scienceqa_samples=args.scienceqa_samples,
             ai2d_samples=args.ai2d_samples,
             gqa_samples=args.gqa_samples,
             seedbench_samples=args.seedbench_samples,
         )
+    except Exception as e:
+        logger.exception(f"Training failed with exception: {e}")
+        sys.exit(1)
     finally:
         os._exit(0)
 
