@@ -35,9 +35,14 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         self.model_name = model_name
 
         # Auto-resolve pretrained dataset tag if not specified or default is passed
-        if pretrained is None or pretrained == "laion2b_s34b_b79k":
+        if "siglip" in model_name.lower():
+            if pretrained is None or pretrained.startswith("laion"):
+                pretrained = "webli"
+        elif pretrained is None or pretrained == "laion2b_s34b_b79k":
             if model_name == "ViT-B-16":
                 pretrained = "laion2b_s34b_b88k"
+            elif model_name == "ViT-L-14":
+                pretrained = "laion2b_s32b_b82k"
             else:
                 pretrained = "laion2b_s34b_b79k"
         elif model_name == "ViT-B-32" and pretrained == "laion2b_s34b_b88k":
@@ -53,7 +58,14 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
             model_name, pretrained=pretrained, device=self.device
         )
         self.tokenizer = open_clip.get_tokenizer(model_name)
-        self._dim = getattr(self.model, "visual", self.model).output_dim if hasattr(self.model, "visual") else 512
+        visual_dim = getattr(self.model, "visual", None)
+        text_dim = getattr(self.model, "text", None)
+        if visual_dim is not None and getattr(visual_dim, "output_dim", None) is not None:
+            self._dim = visual_dim.output_dim
+        elif text_dim is not None and getattr(text_dim, "output_dim", None) is not None:
+            self._dim = text_dim.output_dim
+        else:
+            self._dim = 768 if "siglip" in model_name.lower() else 512
 
         # Temporal Video Attention Transformer
         self.temporal_attention = SpatioTemporalVideoAttention(
@@ -150,6 +162,13 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
                     tokens_proj = tokens @ visual.proj
                 else:
                     tokens_proj = tokens
+                patch_tokens = tokens_proj / (tokens_proj.norm(dim=-1, keepdim=True) + 1e-8)
+            elif visual is not None and hasattr(visual, "trunk") and hasattr(visual.trunk, "forward_features"):
+                feat = visual.trunk.forward_features(batch)
+                if hasattr(visual, "head") and getattr(visual.head, "proj", None) is not None:
+                    tokens_proj = visual.head.proj(feat)
+                else:
+                    tokens_proj = feat
                 patch_tokens = tokens_proj / (tokens_proj.norm(dim=-1, keepdim=True) + 1e-8)
             else:
                 pooled = self.encode_image(images)

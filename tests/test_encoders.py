@@ -47,3 +47,21 @@ def test_encoder_freezing():
     encoder.freeze()
     for p in encoder.parameters():
         assert not p.requires_grad
+
+
+def test_openclip_siglip_resolution():
+    from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
+    encoder = OpenCLIPMultimodalEncoder(model_name="ViT-B-16-SigLIP", device="cpu")
+    assert encoder.pretrained == "webli"
+    assert encoder.text_dim == 768
+    assert encoder.image_dim == 768
+
+    # Test text encoding
+    t_emb = encoder.encode_text(["a car", "a dog"])
+    assert t_emb.shape == (2, 768)
+    assert torch.isclose(t_emb.norm(dim=-1), torch.ones(2), atol=1e-4).all()
+
+    # Test patch extraction
+    img = Image.new("RGB", (224, 224), color=(100, 150, 200))
+    patches = encoder.encode_image_patches([img])
+    assert patches.shape == (1, 196, 768)
