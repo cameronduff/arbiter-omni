@@ -41,6 +41,9 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         enable_spatial_cross_attention: bool = False,
     ):
         super().__init__(hidden_dim=hidden_dim)
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.dim_feedforward = dim_feedforward
         self.condition_query_on_question = condition_query_on_question
         self.enable_spatial_cross_attention = enable_spatial_cross_attention
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -106,12 +106,24 @@ class CachedMultimodalDataset(Dataset):
                     audios=audios,
                 )
 
-                # 2. Encode candidates per sample
-                # Each sample can have varying candidate lengths K
+                # 2. Encode candidates per sample in a single batched pass
                 b_size = len(questions)
+                flat_cands: List[str] = []
+                sample_cand_ranges: List[Tuple[int, int]] = []
+                for cands in candidates:
+                    start_idx = len(flat_cands)
+                    flat_cands.extend(cands)
+                    end_idx = len(flat_cands)
+                    sample_cand_ranges.append((start_idx, end_idx))
+
+                if flat_cands:
+                    all_c_embeds = model.encoder.encode_text(flat_cands).detach().cpu()
+                else:
+                    all_c_embeds = torch.empty((0, model.encoder.text_dim))
+
                 for i in range(b_size):
-                    cands = candidates[i]
-                    c_embed = model.encoder.encode_text(cands).detach().cpu()
+                    start_idx, end_idx = sample_cand_ranges[i]
+                    c_embed = all_c_embeds[start_idx:end_idx]
                     targ = int(targets[i].item()) if targets is not None else None
 
                     s_q = q_embeds[i].detach().cpu()
@@ -131,10 +143,9 @@ class CachedMultimodalDataset(Dataset):
                         )
                     )
 
-
                 sample_offset += b_size
-                if verbose and (sample_offset % 100 == 0 or sample_offset == total):
-                    logger.info(f"  Cached {sample_offset}/{total} samples ({sample_offset/total*100:.1f}%)")
+                if verbose and ((sample_offset - b_size) // 200 != sample_offset // 200 or sample_offset >= total):
+                    logger.info(f"  Cached {min(sample_offset, total)}/{total} samples ({min(100.0, sample_offset/total*100):.1f}%)")
 
         if verbose:
             logger.info(f"✅ Pre-caching complete! {len(cached_samples)} samples in memory.")

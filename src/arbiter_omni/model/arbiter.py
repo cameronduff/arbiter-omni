@@ -42,6 +42,9 @@ class ArbiterOmniModel(nn.Module):
         decision_head: Optional[DynamicDecisionHead] = None,
         hidden_dim: int = 256,
         scoring_dim: int = 256,
+        num_layers: int = 2,
+        num_heads: int = 4,
+        enable_spatial_cross_attention: bool = False,
         use_spatial_patches: bool = True,
         modality_dropout_prob: float = 0.0,
     ):
@@ -50,7 +53,6 @@ class ArbiterOmniModel(nn.Module):
         self.encoder.freeze()  # Guarantee encoders are frozen
         self.use_spatial_patches = use_spatial_patches
         self.modality_dropout_prob = modality_dropout_prob
-
 
         # Setup default fusion if none supplied
         if fusion is None:
@@ -64,6 +66,10 @@ class ArbiterOmniModel(nn.Module):
             self.fusion = TransformerMultimodalFusion(
                 modality_dims=modality_dims,
                 hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                num_layers=num_layers,
+                dim_feedforward=hidden_dim * 2,
+                enable_spatial_cross_attention=enable_spatial_cross_attention,
             )
         else:
             self.fusion = fusion
@@ -112,8 +118,11 @@ class ArbiterOmniModel(nn.Module):
         if texts is not None:
             text_present = [t is not None and len(str(t).strip()) > 0 for t in texts]
             presence_mask[ModalityType.TEXT] = torch.tensor(text_present, dtype=torch.bool, device=device)
-            valid_texts = [t if p else "" for t, p in zip(texts, text_present)]
-            modality_embeds[ModalityType.TEXT] = self.encoder.encode_text(valid_texts).to(device)
+            if any(text_present):
+                valid_texts = [t if p else "" for t, p in zip(texts, text_present)]
+                modality_embeds[ModalityType.TEXT] = self.encoder.encode_text(valid_texts).to(device)
+            else:
+                modality_embeds[ModalityType.TEXT] = torch.zeros((B, self.encoder.text_dim), device=device)
         else:
             presence_mask[ModalityType.TEXT] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.TEXT] = torch.zeros((B, self.encoder.text_dim), device=device)
@@ -122,20 +131,29 @@ class ArbiterOmniModel(nn.Module):
         if images is not None:
             img_present = [img is not None for img in images]
             presence_mask[ModalityType.IMAGE] = torch.tensor(img_present, dtype=torch.bool, device=device)
-            valid_imgs = [img if p else None for img, p in zip(images, img_present)]
-            modality_embeds[ModalityType.IMAGE] = self.encoder.encode_image(valid_imgs).to(device)
-            if self.use_spatial_patches and any(img_present):
-                image_patches = self.encoder.encode_image_patches(valid_imgs).to(device)
+            if any(img_present):
+                valid_imgs = [img if p else None for img, p in zip(images, img_present)]
+                modality_embeds[ModalityType.IMAGE] = self.encoder.encode_image(valid_imgs).to(device)
+                if self.use_spatial_patches:
+                    image_patches = self.encoder.encode_image_patches(valid_imgs).to(device)
+            else:
+                modality_embeds[ModalityType.IMAGE] = torch.zeros((B, self.encoder.image_dim), device=device)
         else:
             presence_mask[ModalityType.IMAGE] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.IMAGE] = torch.zeros((B, self.encoder.image_dim), device=device)
 
         # 3. Video modality
         if videos is not None:
-            vid_present = [vid is not None for vid in videos]
+            vid_present = [
+                vid is not None and (len(vid) > 0 if isinstance(vid, (list, tuple)) else True)
+                for vid in videos
+            ]
             presence_mask[ModalityType.VIDEO] = torch.tensor(vid_present, dtype=torch.bool, device=device)
-            valid_vids = [vid if p else [] for vid, p in zip(videos, vid_present)]
-            modality_embeds[ModalityType.VIDEO] = self.encoder.encode_video(valid_vids).to(device)
+            if any(vid_present):
+                valid_vids = [vid if p else [] for vid, p in zip(videos, vid_present)]
+                modality_embeds[ModalityType.VIDEO] = self.encoder.encode_video(valid_vids).to(device)
+            else:
+                modality_embeds[ModalityType.VIDEO] = torch.zeros((B, self.encoder.video_dim), device=device)
         else:
             presence_mask[ModalityType.VIDEO] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.VIDEO] = torch.zeros((B, self.encoder.video_dim), device=device)
@@ -144,8 +162,11 @@ class ArbiterOmniModel(nn.Module):
         if audios is not None:
             aud_present = [aud is not None for aud in audios]
             presence_mask[ModalityType.AUDIO] = torch.tensor(aud_present, dtype=torch.bool, device=device)
-            valid_auds = [aud if p else None for aud, p in zip(audios, aud_present)]
-            modality_embeds[ModalityType.AUDIO] = self.encoder.encode_audio(valid_auds).to(device)
+            if any(aud_present):
+                valid_auds = [aud if p else None for aud, p in zip(audios, aud_present)]
+                modality_embeds[ModalityType.AUDIO] = self.encoder.encode_audio(valid_auds).to(device)
+            else:
+                modality_embeds[ModalityType.AUDIO] = torch.zeros((B, self.encoder.audio_dim), device=device)
         else:
             presence_mask[ModalityType.AUDIO] = torch.zeros(B, dtype=torch.bool, device=device)
             modality_embeds[ModalityType.AUDIO] = torch.zeros((B, self.encoder.audio_dim), device=device)
@@ -178,28 +199,37 @@ class ArbiterOmniModel(nn.Module):
 
         templates = prompt_templates if prompt_templates is not None else DEFAULT_PROMPT_TEMPLATES
 
-        # Flatten all unique candidates or per-sample candidates
+        if not (use_prompt_ensembling and templates):
+            # High-efficiency batched text encoding: flatten all candidates into single forward pass
+            flat_cands: List[str] = []
+            cand_indices: List[Tuple[int, int]] = []
+            for i, cands in enumerate(candidates_batch):
+                for j, c in enumerate(cands):
+                    flat_cands.append(c)
+                    cand_indices.append((i, j))
+            if flat_cands:
+                all_encoded = self.encoder.encode_text(flat_cands).to(device)
+                for idx, (i, j) in enumerate(cand_indices):
+                    candidate_embeds[i, j, :] = all_encoded[idx]
+                    candidate_mask[i, j] = True
+            return candidate_embeds, candidate_mask
+
+        # Prompt template ensembling
         for i, cands in enumerate(candidates_batch):
             k = len(cands)
             if k == 0:
                 continue
 
-            if use_prompt_ensembling and templates:
-                # Prompt template ensembling
-                all_prompts: List[str] = []
-                for c in cands:
-                    for t in templates:
-                        all_prompts.append(t.format(c) if "{}" in t else f"{t} {c}")
-                all_encoded = self.encoder.encode_text(all_prompts).to(device)
-                num_t = len(templates)
-                reshaped = all_encoded.view(k, num_t, -1)
-                avg_encoded = reshaped.mean(dim=1)
-                avg_encoded = F.normalize(avg_encoded, p=2, dim=-1)
-                candidate_embeds[i, :k, :] = avg_encoded
-            else:
-                encoded = self.encoder.encode_text(cands).to(device)
-                candidate_embeds[i, :k, :] = encoded
-
+            all_prompts: List[str] = []
+            for c in cands:
+                for t in templates:
+                    all_prompts.append(t.format(c) if "{}" in t else f"{t} {c}")
+            all_encoded = self.encoder.encode_text(all_prompts).to(device)
+            num_t = len(templates)
+            reshaped = all_encoded.view(k, num_t, -1)
+            avg_encoded = reshaped.mean(dim=1)
+            avg_encoded = F.normalize(avg_encoded, p=2, dim=-1)
+            candidate_embeds[i, :k, :] = avg_encoded
             candidate_mask[i, :k] = True
 
         return candidate_embeds, candidate_mask

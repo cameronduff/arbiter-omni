@@ -362,17 +362,28 @@ class ArbiterOmniTrainer:
 
     def save_checkpoint(self, path: str):
         """Saves only the trainable weights (fusion + decision head) and config."""
+        fusion_mod = self.model.fusion
         state = {
-            "fusion": self.model.fusion.state_dict(),
+            "fusion": fusion_mod.state_dict(),
             "decision_head": self.model.decision_head.state_dict(),
             "config": self.config.__dict__,
+            "model_config": {
+                "hidden_dim": getattr(fusion_mod, "hidden_dim", 256),
+                "num_heads": getattr(fusion_mod, "num_heads", 4),
+                "num_layers": getattr(fusion_mod, "num_layers", 2),
+                "scoring_dim": getattr(self.model.decision_head, "scoring_dim", 256),
+                "model_name": getattr(self.model.encoder, "model_name", "ViT-B-32"),
+            },
         }
         torch.save(state, path)
         logger.info(f"Saved trainable checkpoint to {path}")
 
     def load_checkpoint(self, path: str):
         """Loads trained weights into fusion and decision head."""
-        state = torch.load(path, map_location=self.device)
+        try:
+            state = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError:
+            state = torch.load(path, map_location=self.device)
         self.model.fusion.load_state_dict(state["fusion"])
         self.model.decision_head.load_state_dict(state["decision_head"])
         logger.info(f"Loaded checkpoint from {path}")

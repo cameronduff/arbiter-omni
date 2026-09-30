@@ -246,22 +246,28 @@ def contrastive_margin_loss(
     """
     B, K = logits.shape
     device = logits.device
-    batch_indices = torch.arange(B, device=device)
 
-    # Positive candidate score: s_pos = logits[b, targets[b]]
-    s_pos = logits[batch_indices, targets]  # [B]
+    # Positive candidate score: s_pos = logits[b, targets[b]] via gather
+    s_pos = logits.gather(1, targets.unsqueeze(1)).squeeze(1)  # [B]
 
     if hard_neg_indices is not None:
-        s_hard_neg = logits[batch_indices, hard_neg_indices]
+        s_hard_neg = logits.gather(1, hard_neg_indices.unsqueeze(1)).squeeze(1)
     else:
         # Exclude positive target from negative pool
-        neg_logits = logits.clone()
-        neg_logits[batch_indices, targets] = -1e9
+        col_indices = torch.arange(K, device=device).unsqueeze(0).expand(B, K)
+        is_target = col_indices == targets.unsqueeze(1)
+        neg_mask = is_target
         if candidate_mask is not None:
-            neg_logits = neg_logits.masked_fill(~candidate_mask, -1e9)
+            neg_mask = neg_mask | (~candidate_mask)
 
-        # Hardest negative is the maximum among valid negative candidates
-        s_hard_neg, _ = neg_logits.max(dim=-1)  # [B]
+        neg_logits = torch.where(
+            neg_mask, torch.tensor(-1e9, device=device, dtype=logits.dtype), logits
+        )
+
+        # Hardest negative is the maximum among valid negative candidates.
+        # Use argmax + gather for hardware portability (DirectML autograd lacks multidimensional scatter support).
+        hard_neg_idx = neg_logits.argmax(dim=-1, keepdim=True)
+        s_hard_neg = neg_logits.gather(1, hard_neg_idx).squeeze(1)  # [B]
 
     # Margin violation: max(0, margin - (s_pos - s_hard_neg))
     margin_diff = margin - (s_pos - s_hard_neg)
