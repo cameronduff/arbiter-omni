@@ -120,7 +120,17 @@ class ArbiterOmniTrainer:
         start_time = time.perf_counter()
         self.optimizer.zero_grad()
 
-        for batch_idx, batch in enumerate(dataloader):
+        if getattr(self.config, "async_prefetch", True) and len(dataloader) > 1:
+            from arbiter_omni.training.prefetcher import AsyncDMADataPrefetcher
+            data_iter = AsyncDMADataPrefetcher(
+                dataloader=dataloader,
+                device=self.device,
+                queue_size=getattr(self.config, "prefetch_queue_size", 2),
+            )
+        else:
+            data_iter = dataloader
+
+        for batch_idx, batch in enumerate(data_iter):
             targets = batch["targets"]
             if targets is None:
                 continue
@@ -267,8 +277,18 @@ class ArbiterOmniTrainer:
         total_samples = 0
         total_entropy = 0.0
 
+        if getattr(self.config, "async_prefetch", True) and len(dataloader) > 1:
+            from arbiter_omni.training.prefetcher import AsyncDMADataPrefetcher
+            val_iter = AsyncDMADataPrefetcher(
+                dataloader=dataloader,
+                device=self.device,
+                queue_size=getattr(self.config, "prefetch_queue_size", 2),
+            )
+        else:
+            val_iter = dataloader
+
         with torch.no_grad():
-            for batch in dataloader:
+            for batch in val_iter:
                 targets = batch["targets"]
                 if targets is None:
                     continue
@@ -467,6 +487,7 @@ class ArbiterOmniTrainer:
                 "scoring_dim": getattr(self.model.decision_head, "scoring_dim", 256),
                 "model_name": getattr(self.model.encoder, "model_name", "ViT-B-32"),
                 "enable_spatial_cross_attention": getattr(fusion_mod, "enable_spatial_cross_attention", False),
+                "max_spatial_patches": getattr(fusion_mod, "max_spatial_patches", 196),
             },
         }
         torch.save(state, path)

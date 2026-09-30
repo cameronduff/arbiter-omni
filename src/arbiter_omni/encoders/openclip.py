@@ -30,9 +30,11 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         device: Optional[torch.device] = None,
         enable_clap_weights: bool = False,
         use_temporal_attention: bool = True,
+        max_frames: int = 64,
     ):
         super().__init__(device=device)
         self.model_name = model_name
+        self.max_frames = max_frames
 
         # Auto-resolve pretrained dataset tag if not specified or default is passed
         if "siglip" in model_name.lower():
@@ -67,9 +69,9 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
         else:
             self._dim = 768 if "siglip" in model_name.lower() else 512
 
-        # Temporal Video Attention Transformer
+        # Temporal Video Attention Transformer (64-frame dense long horizon)
         self.temporal_attention = SpatioTemporalVideoAttention(
-            embed_dim=self._dim, max_frames=32, num_heads=8
+            embed_dim=self._dim, max_frames=max_frames, num_heads=8
         ).to(self.device)
 
         # CLAP Audio Encoder
@@ -110,7 +112,12 @@ class OpenCLIPMultimodalEncoder(BaseMultimodalEncoder):
 
     def encode_text(self, texts: Sequence[str]) -> torch.Tensor:
         """Embeds text prompts, questions, or candidate decisions."""
-        tokens = self.tokenizer(list(texts)).to(self.device)
+        dev = self.device
+        try:
+            dev = next(self.model.parameters()).device
+        except (StopIteration, AttributeError):
+            pass
+        tokens = self.tokenizer(list(texts)).to(dev)
         with torch.no_grad():
             features = self.model.encode_text(tokens)
             features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)

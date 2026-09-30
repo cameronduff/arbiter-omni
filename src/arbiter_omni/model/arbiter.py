@@ -47,6 +47,8 @@ class ArbiterOmniModel(nn.Module):
         enable_spatial_cross_attention: bool = False,
         use_spatial_patches: bool = True,
         modality_dropout_prob: float = 0.0,
+        max_spatial_patches: int = 196,
+        **kwargs,
     ):
         super().__init__()
         self.encoder = encoder
@@ -70,6 +72,7 @@ class ArbiterOmniModel(nn.Module):
                 num_layers=num_layers,
                 dim_feedforward=hidden_dim * 2,
                 enable_spatial_cross_attention=enable_spatial_cross_attention,
+                max_spatial_patches=max_spatial_patches,
             )
         else:
             self.fusion = fusion

@@ -59,6 +59,16 @@ class BaseMultimodalEncoder(nn.Module, ABC):
             p.requires_grad = False
         return self
 
+    def to(self, *args, **kwargs) -> BaseMultimodalEncoder:
+        """Transfers encoder to device and updates internal device pointer."""
+        for arg in args:
+            if isinstance(arg, (torch.device, str)):
+                self._device = torch.device(arg)
+                break
+        if "device" in kwargs and kwargs["device"] is not None:
+            self._device = torch.device(kwargs["device"])
+        return super().to(*args, **kwargs)
+
     @abstractmethod
     def encode_text(self, texts: Sequence[str]) -> torch.Tensor:
         """

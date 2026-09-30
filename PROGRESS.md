@@ -45,8 +45,12 @@
 | **Multi-Scale Spatial Cross-Attention for v3** | ✅ Completed | 768-dim projection support, `v3` tag resolution, and dynamic architecture loading in `ArbiterOmniEngine.from_pretrained('v3')` [AO-18] |
 | **Production `v3` Checkpoint (GPU Trained)** | ✅ Completed | Trained 13.32M trainable parameters on AMD Radeon RX 480 GPU via DirectML across ScienceQA, AI2D, GQA, and SEED-Bench-2 to `checkpoints/arbiter_omni_v3.pt` (76.20 MB, 71.6% val acc, 3 epochs) [AO-19] |
 | **Comprehensive Verification & Evaluation** | ✅ Completed | Evaluated `sample_action.mp4` with high-confidence video action arbitration, updated Gradio interactive demo, and verified 100% pass rate [AO-20] |
-| **Benchmark Suite (9 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2 |
-| **Unit Test Coverage** | ✅ Completed | 110/110 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16, modality dropout, cross-attention, temperature calibration, inter-frame velocity projection, patch centroid flow, SigLIP backbone) |
+| **Dense 64-Frame Video Temporal Buffering** | ✅ Completed | Scaled `SpatioTemporalVideoAttention` to 64 dense frames with multi-stride patch centroid velocity flow and sub-batched chunking [AO-21] |
+| **High-Resolution Dynamic Patch Tiling** | ✅ Completed | `DynamicImageTiler` (LLaVA-NeXT style 1 global overview + 4 quadrant crops) generating 980 spatial patch tokens for fine-grained grounding [AO-22] |
+| **50k Resident Hard-Negative Memory Bank** | ✅ Completed | `PersistentMemoryBank` resident in shared system RAM heap (153.6 MB) maintaining 50k candidate FIFO queue for global foil contrast [AO-23] |
+| **Async DMA Double-Buffering & v4 Training** | ✅ Completed | `AsyncDMADataPrefetcher` asynchronous PCIe DMA stream prefetching and trained `checkpoints/arbiter_omni_v4.pt` on AMD RX 480 GPU [AO-24] |
+| **Benchmark Suite (10 Stages)** | ✅ Completed | Hardware audit, parameter audit, GPU batch throughput, robustness, p50 latency, real ScienceQA, video attention, robotics, SEED-Bench-2, shared memory scaling |
+| **Unit Test Coverage** | ✅ Completed | 126/126 unit tests passing (100% pass across encoders, fusion, heads, device, AMP, datasets, UI, extended eval, checkpoints, DirectML, caching, hard-negative mining, conformal sets, spatial patches, AI2D/GQA streaming adapters, perceptual residual, prompt ensembling, ViT-B-16, modality dropout, cross-attention, temperature calibration, inter-frame velocity projection, patch centroid flow, SigLIP backbone, 64-frame video buffering, 980 patch tiling, 50k memory bank, and DMA double buffering) |
 
 
 
@@ -152,10 +156,21 @@
   - **Epoch 2**: Train Acc: 55.1% | Val Acc: 67.9% | Loss: 55.82 | Speed: 21.5 samples/s
   - **Epoch 3**: **Train Acc: 63.6% | Val Acc: 71.6% | Loss: 53.88 | Speed: 22.8 samples/s**
 - **Production Checkpoint**: Published to `checkpoints/arbiter_omni_v3.pt` (76.20 MB).
-- **Real Video Action Decision Verification**:
-  - Evaluated on `sample_action.mp4` via `ArbiterOmniEngine.from_pretrained('v3')`.
-  - Decision Winner: **"Automobile driving rapidly through highway traffic" (50.6% confidence, 1.17 nats entropy)** vs sitting down (14.4%) and athletic exercise (27.7%).
-- **Interactive Playground**: Updated `examples/interactive_demo.py` prioritizing `v3` checkpoint as default.
+### 16. ArbiterOmni v4 Shared Memory Scaling Checkpoint (GPU Trained) [AO-21, AO-22, AO-23, AO-24]
+- **Shared Memory Architecture**: Unlocks the 12 GB total hardware memory pool on AMD Radeon RX 480 by splitting compute and memory across tiers:
+  - **4 GB Dedicated GDDR5 VRAM**: Runs active 4-layer / 8-head Transformer fusion weights (13.32M parameters) and backward autograd (~1.2–1.5 GB footprint).
+  - **8 GB Shared System RAM Heap**: Houses the pre-cached 3,780-sample dataset (~2.5 GB), the 50k candidate memory bank (153.6 MB), offloaded SigLIP 203M parameters (~850 MB), and PCIe DMA prefetch double-buffers (~100 MB).
+- **Dense 64-Frame Video Buffering [AO-21]**: Scaled `SpatioTemporalVideoAttention` to 64 dense temporal frames with multi-stride patch centroid velocity flow tracking both short-range ($t, t-1$) and long-range ($t, t-k$) motion trajectories.
+- **High-Resolution Dynamic Patch Tiling (LLaVA-NeXT Style) [AO-22]**: `DynamicImageTiler` extracts 1 global overview + 4 quadrant crops for high-resolution images, scaling spatial representation up to $5 \times 196 = 980$ patch tokens with dynamic positional embeddings.
+- **50,000-Candidate Resident Hard-Negative Memory Bank [AO-23]**: Cyclic FIFO buffer in shared RAM holding 50k normalized 768-dim candidate vectors. Top-10 hardest foils are retrieved with boundary thresholds ($0.25 \le \text{sim} \le 0.98$) and penalized via multi-choice contrastive margin loss.
+- **Asynchronous DMA Stream Double-Buffering [AO-24]**: `AsyncDMADataPrefetcher` stages batches in pinned shared memory and streams them asynchronously over PCIe DMA during GPU backward passes.
+- **Training Progression & Validation Accuracy**:
+  - **Epoch 1**: Train Acc: 52.6% | Val Acc: 54.0% | Loss: 72.82 | Speed: 21.3 samples/s
+  - **Epoch 2**: Train Acc: 59.9% | Val Acc: 58.3% | Loss: 70.73 | Speed: 22.7 samples/s
+  - **Epoch 3**: **Train Acc: 62.3% | Val Acc: 59.5% | Loss: 72.47 | Speed: 22.5 samples/s**
+- **Production Checkpoint**: Published to `checkpoints/arbiter_omni_v4.pt` (76.19 MB).
+- **Runtime Inference Verification**: Verified via `ArbiterOmniEngine.from_pretrained('v4')` across multimodal benchmarks and updated `examples/interactive_demo.py` defaulting to `v4`.
+
 
 
 

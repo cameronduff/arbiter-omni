@@ -45,3 +45,7 @@ class TrainingConfig:
     global_contrastive_lambda: float = 1.0
     global_margin_gamma: float = 0.5
 
+    # Asynchronous DMA Double-Buffering [AO-24]
+    async_prefetch: bool = True
+    prefetch_queue_size: int = 2
+

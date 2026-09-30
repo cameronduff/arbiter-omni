@@ -40,6 +40,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         dropout: float = 0.1,
         condition_query_on_question: bool = False,
         enable_spatial_cross_attention: bool = False,
+        max_spatial_patches: int = 980,
     ):
         super().__init__(hidden_dim=hidden_dim)
         self.num_heads = num_heads
@@ -47,6 +48,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         self.dim_feedforward = dim_feedforward
         self.condition_query_on_question = condition_query_on_question
         self.enable_spatial_cross_attention = enable_spatial_cross_attention
+        self.max_spatial_patches = max_spatial_patches
 
         # Projections for each input stream to shared hidden dimension
         self.projections = nn.ModuleDict()

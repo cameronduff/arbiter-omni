@@ -146,8 +146,12 @@ def train_v1(
     ai2d_samples: int = 500,
     gqa_samples: int = 2000,
     seedbench_samples: int = 100,
+    max_spatial_patches: int = 196,
+    use_memory_bank: bool = False,
+    memory_bank_capacity: int = 50000,
+    async_prefetch: bool = True,
 ) -> str:
-    """Executes the v1/v2 checkpoint training pipeline and saves weights."""
+    """Executes the v1/v2/v3/v4 checkpoint training pipeline and saves weights."""
     device = resolve_device(device_name)
     telemetry = get_device_telemetry(device)
     logger.info(f"Training on Device: {telemetry['device']} ({telemetry['gpu_name']})")
@@ -177,6 +181,7 @@ def train_v1(
         num_layers=num_layers,
         dim_feedforward=hidden_dim * 2,
         enable_spatial_cross_attention=enable_cross_attention,
+        max_spatial_patches=max_spatial_patches,
     )
     decision_head = DynamicDecisionHead(
         context_dim=hidden_dim,
@@ -283,10 +288,13 @@ def train_v1(
         accumulate_grad_batches=accumulate_grad_batches,
         contrastive_lambda=contrastive_lambda,
         margin_gamma=margin_gamma,
+        use_memory_bank=use_memory_bank,
+        memory_bank_capacity=memory_bank_capacity,
+        async_prefetch=async_prefetch,
     )
 
     trainer = ArbiterOmniTrainer(model=model, config=config)
-    logger.info(f"Starting training loop (contrastive_lambda={contrastive_lambda}, margin_gamma={margin_gamma})...")
+    logger.info(f"Starting training loop (contrastive_lambda={contrastive_lambda}, margin_gamma={margin_gamma}, memory_bank={use_memory_bank})...")
     history = trainer.fit(train_dataset=train_dataset, val_dataset=val_dataset)
 
     # Verify saved checkpoint
@@ -310,7 +318,11 @@ if __name__ == "__main__":
     parser.add_argument("--num-layers", type=int, default=2, help="Number of fusion transformer layers")
     parser.add_argument("--num-heads", type=int, default=4, help="Number of attention heads")
     parser.add_argument("--scoring-dim", type=int, default=256, help="Decision head scoring projection dimension")
+    parser.add_argument("--max-spatial-patches", type=int, default=196, help="Maximum unpooled spatial patches (196 for standard, 980 for v4 multi-tile)")
     parser.add_argument("--enable-cross-attention", action="store_true", help="Enable visual spatial cross-attention")
+    parser.add_argument("--use-memory-bank", action="store_true", help="Enable 50k candidate memory bank resident in shared RAM [AO-23]")
+    parser.add_argument("--memory-bank-capacity", type=int, default=50000, help="Capacity of shared memory bank")
+    parser.add_argument("--no-async-prefetch", action="store_true", help="Disable asynchronous stream double buffering")
     parser.add_argument("--use-mock-data", action="store_true", help="Use synthetic mock data instead of streaming")
     parser.add_argument("--no-cache", action="store_true", help="Disable embedding pre-caching")
     parser.add_argument("--contrastive-lambda", type=float, default=0.2, help="Weight lambda for contrastive margin loss")
@@ -336,7 +348,11 @@ if __name__ == "__main__":
             num_layers=args.num_layers,
             num_heads=args.num_heads,
             scoring_dim=args.scoring_dim,
+            max_spatial_patches=args.max_spatial_patches,
             enable_cross_attention=args.enable_cross_attention,
+            use_memory_bank=args.use_memory_bank,
+            memory_bank_capacity=args.memory_bank_capacity,
+            async_prefetch=not args.no_async_prefetch,
             use_mock_data=args.use_mock_data,
             device_name=args.device,
             cache_embeddings=not args.no_cache,

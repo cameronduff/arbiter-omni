@@ -85,6 +85,9 @@ def get_engine() -> Optional[Any]:
     if _ENGINE is None:
         try:
             device = resolve_device()
+            v4_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v4.pt")
+            )
             v3_path = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v3.pt")
             )
@@ -95,7 +98,9 @@ def get_engine() -> Optional[Any]:
                 os.path.join(os.path.dirname(__file__), "..", "checkpoints", "arbiter_omni_v1.pt")
             )
             checkpoint_path = (
-                v3_path if os.path.exists(v3_path) else (v2_path if os.path.exists(v2_path) else (v1_path if os.path.exists(v1_path) else None))
+                v4_path
+                if os.path.exists(v4_path)
+                else (v3_path if os.path.exists(v3_path) else (v2_path if os.path.exists(v2_path) else (v1_path if os.path.exists(v1_path) else None)))
             )
             if checkpoint_path and os.path.exists(checkpoint_path):
                 _ENGINE = ArbiterOmniEngine.from_pretrained(
