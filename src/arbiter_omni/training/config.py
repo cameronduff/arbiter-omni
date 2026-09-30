@@ -36,3 +36,12 @@ class TrainingConfig:
     # Modality Dropout Regularization [AO-14]
     modality_dropout_prob: float = 0.0  # Fraction of present sensory modalities dropped during training (e.g. 0.15)
 
+    # Global Hard-Negative Memory Bank [AO-23]
+    use_memory_bank: bool = False
+    memory_bank_capacity: int = 50000
+    memory_bank_k_foils: int = 10
+    memory_bank_min_sim: float = 0.25
+    memory_bank_max_sim: float = 0.98
+    global_contrastive_lambda: float = 1.0
+    global_margin_gamma: float = 0.5
+

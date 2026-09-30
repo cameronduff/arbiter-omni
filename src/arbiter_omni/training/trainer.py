@@ -89,6 +89,22 @@ class ArbiterOmniTrainer:
             "cuda", enabled=(self.config.fp16 and self.device.type == "cuda")
         )
 
+        # Global Hard-Negative Memory Bank [AO-23]
+        if getattr(self.config, "use_memory_bank", False):
+            from arbiter_omni.data.memory_bank import PersistentMemoryBank
+            self.memory_bank = PersistentMemoryBank(
+                capacity=self.config.memory_bank_capacity,
+                candidate_dim=self.model.encoder.text_dim,
+                context_dim=getattr(self.model.fusion, "fusion_dim", None),
+                device="cpu",
+            )
+            logger.info(
+                f"Initialized PersistentMemoryBank [AO-23] (capacity: {self.config.memory_bank_capacity:,}, "
+                f"dim: {self.model.encoder.text_dim}, shared RAM: {self.memory_bank.memory_usage_mb:.2f} MB)"
+            )
+        else:
+            self.memory_bank = None
+
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         """Runs a single training epoch with mixed precision and gradient accumulation."""
         self.model.train()
@@ -121,7 +137,7 @@ class ArbiterOmniTrainer:
                     batch_patches = batch.get("image_patches", None)
                     if batch_patches is not None and isinstance(batch_patches, torch.Tensor):
                         batch_patches = batch_patches.to(self.device)
-                    logits, probs, entropy, _ = self.model.forward_cached(
+                    logits, probs, entropy, fused_context = self.model.forward_cached(
                         question_embed=batch["question_embed"].to(self.device),
                         modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                         presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
@@ -129,12 +145,11 @@ class ArbiterOmniTrainer:
                         candidate_mask=cand_mask,
                         image_patches=batch_patches,
                     )
-
                 else:
                     cand_mask = batch.get("candidate_mask", None)
                     if cand_mask is not None and isinstance(cand_mask, torch.Tensor):
                         cand_mask = cand_mask.to(self.device)
-                    logits, probs, entropy, _ = self.model(
+                    logits, probs, entropy, fused_context = self.model(
                         questions=batch["questions"],
                         candidates=batch["candidates"],
                         texts=batch["texts"],
@@ -143,6 +158,46 @@ class ArbiterOmniTrainer:
                         audios=batch["audios"],
                     )
 
+                # Global Hard-Negative Memory Bank Contrast [AO-23]
+                global_foil_logits = None
+                global_foil_mask = None
+                if self.memory_bank is not None:
+                    batch_cands = None
+                    if batch.get("is_cached", False):
+                        batch_cands = batch["candidate_embeds"]
+                    elif "candidate_embeds" in batch and isinstance(batch["candidate_embeds"], torch.Tensor):
+                        batch_cands = batch["candidate_embeds"]
+                    elif hasattr(self.model, "encode_candidates"):
+                        batch_cands, cand_m = self.model.encode_candidates(batch["candidates"])
+                        if cand_mask is None:
+                            cand_mask = cand_m
+
+                    if batch_cands is not None and batch_cands.numel() > 0:
+                        B_curr = batch_cands.shape[0]
+                        pos_indices = targets.clamp(0, batch_cands.shape[1] - 1)
+                        pos_embeds = batch_cands[torch.arange(B_curr, device=batch_cands.device), pos_indices]
+
+                        if len(self.memory_bank) > 0:
+                            foil_embeds, _, foil_mask = self.memory_bank.query_hard_foils(
+                                query_embed=pos_embeds,
+                                k=self.config.memory_bank_k_foils,
+                                min_sim=self.config.memory_bank_min_sim,
+                                max_sim=self.config.memory_bank_max_sim,
+                            )
+                            if foil_mask.any():
+                                global_foil_logits = self.model.decision_head.score_foils(
+                                    context_embed=fused_context,
+                                    foil_embeds=foil_embeds.to(self.device),
+                                )
+                                global_foil_mask = foil_mask.to(self.device)
+
+                        # Enqueue in-batch candidate representations into resident memory bank
+                        self.memory_bank.enqueue(
+                            candidate_embeds=batch_cands,
+                            candidate_mask=cand_mask if cand_mask is not None else None,
+                            context_embeds=fused_context,
+                        )
+
                 ce_loss = self.criterion(logits, targets)
                 if self.config.contrastive_lambda > 0.0:
                     margin_loss = contrastive_margin_loss(
@@ -150,6 +205,10 @@ class ArbiterOmniTrainer:
                         targets=targets,
                         candidate_mask=cand_mask,
                         margin=self.config.margin_gamma,
+                        global_foil_logits=global_foil_logits,
+                        global_foil_mask=global_foil_mask,
+                        global_margin=self.config.global_margin_gamma,
+                        global_lambda=self.config.global_contrastive_lambda,
                     )
                     raw_loss = ce_loss + self.config.contrastive_lambda * margin_loss
                 else:
@@ -226,7 +285,7 @@ class ArbiterOmniTrainer:
                         batch_patches = batch.get("image_patches", None)
                         if batch_patches is not None and isinstance(batch_patches, torch.Tensor):
                             batch_patches = batch_patches.to(self.device)
-                        logits, probs, entropy, _ = self.model.forward_cached(
+                        logits, probs, entropy, fused_context = self.model.forward_cached(
                             question_embed=batch["question_embed"].to(self.device),
                             modality_embeds={k: v.to(self.device) for k, v in batch["modality_embeds"].items()},
                             presence_mask={k: v.to(self.device) for k, v in batch["presence_mask"].items()},
@@ -234,12 +293,11 @@ class ArbiterOmniTrainer:
                             candidate_mask=cand_mask,
                             image_patches=batch_patches,
                         )
-
                     else:
                         cand_mask = batch.get("candidate_mask", None)
                         if cand_mask is not None and isinstance(cand_mask, torch.Tensor):
                             cand_mask = cand_mask.to(self.device)
-                        logits, probs, entropy, _ = self.model(
+                        logits, probs, entropy, fused_context = self.model(
                             questions=batch["questions"],
                             candidates=batch["candidates"],
                             texts=batch["texts"],
@@ -248,6 +306,37 @@ class ArbiterOmniTrainer:
                             audios=batch["audios"],
                         )
 
+                    # Global Hard-Negative Memory Bank Contrast [AO-23]
+                    global_foil_logits = None
+                    global_foil_mask = None
+                    if self.memory_bank is not None and len(self.memory_bank) > 0:
+                        batch_cands = None
+                        if batch.get("is_cached", False):
+                            batch_cands = batch["candidate_embeds"]
+                        elif "candidate_embeds" in batch and isinstance(batch["candidate_embeds"], torch.Tensor):
+                            batch_cands = batch["candidate_embeds"]
+                        elif hasattr(self.model, "encode_candidates"):
+                            batch_cands, cand_m = self.model.encode_candidates(batch["candidates"])
+                            if cand_mask is None:
+                                cand_mask = cand_m
+
+                        if batch_cands is not None and batch_cands.numel() > 0:
+                            B_curr = batch_cands.shape[0]
+                            pos_indices = targets.clamp(0, batch_cands.shape[1] - 1)
+                            pos_embeds = batch_cands[torch.arange(B_curr, device=batch_cands.device), pos_indices]
+                            foil_embeds, _, foil_mask = self.memory_bank.query_hard_foils(
+                                query_embed=pos_embeds,
+                                k=self.config.memory_bank_k_foils,
+                                min_sim=self.config.memory_bank_min_sim,
+                                max_sim=self.config.memory_bank_max_sim,
+                            )
+                            if foil_mask.any():
+                                global_foil_logits = self.model.decision_head.score_foils(
+                                    context_embed=fused_context,
+                                    foil_embeds=foil_embeds.to(self.device),
+                                )
+                                global_foil_mask = foil_mask.to(self.device)
+
                     ce_loss = self.criterion(logits, targets)
                     if self.config.contrastive_lambda > 0.0:
                         margin_loss = contrastive_margin_loss(
@@ -255,6 +344,10 @@ class ArbiterOmniTrainer:
                             targets=targets,
                             candidate_mask=cand_mask,
                             margin=self.config.margin_gamma,
+                            global_foil_logits=global_foil_logits,
+                            global_foil_mask=global_foil_mask,
+                            global_margin=self.config.global_margin_gamma,
+                            global_lambda=self.config.global_contrastive_lambda,
                         )
                         loss = ce_loss + self.config.contrastive_lambda * margin_loss
                     else:

@@ -14,6 +14,7 @@ from arbiter_omni.data.gqa import (
     GQAAdapter,
     load_gqa_dataset,
 )
+from arbiter_omni.data.memory_bank import PersistentMemoryBank
 from arbiter_omni.data.robotics import (
     RoboticsActionAdapter,
     generate_robotics_samples,
@@ -38,6 +39,7 @@ __all__ = [
     "AI2DAdapter",
     "GQAAdapter",
     "MultimodalDecisionDataset",
+    "PersistentMemoryBank",
     "RoboticsActionAdapter",
     "SEEDBenchAdapter",
     "ScienceQAAdapter",

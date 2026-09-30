@@ -71,9 +71,11 @@ class HardNegativeMiner:
         candidate_pool: Optional[Sequence[str]] = None,
         batch_size: int = 64,
         device: Optional[Union[str, torch.device]] = None,
+        memory_bank: Optional[Any] = None,
     ):
         self.encoder = encoder
         self.device = device or getattr(encoder, "device", torch.device("cpu"))
+        self.memory_bank = memory_bank
         
         # Deduplicate pool
         pool_raw = candidate_pool if candidate_pool is not None else DEFAULT_CANDIDATE_POOL
@@ -90,6 +92,16 @@ class HardNegativeMiner:
 
         # Pre-compute L2-normalized embeddings for the candidate pool
         self.pool_embeddings = self._encode_texts(self.pool, batch_size=batch_size)
+
+        if self.memory_bank is not None:
+            self.populate_memory_bank(self.memory_bank)
+
+    def populate_memory_bank(self, bank: Optional[Any] = None) -> int:
+        """Populates a PersistentMemoryBank with candidate pool representations."""
+        target_bank = bank if bank is not None else self.memory_bank
+        if target_bank is None:
+            return 0
+        return target_bank.enqueue(self.pool_embeddings, texts=self.pool)
 
     def _encode_texts(self, texts: Sequence[str], batch_size: int = 64) -> torch.Tensor:
         """Encodes texts into L2-normalized vectors."""

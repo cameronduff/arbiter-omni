@@ -177,6 +177,42 @@ class DynamicDecisionHead(nn.Module):
 
         return scaled_logits, probs, entropy
 
+    def score_foils(
+        self,
+        context_embed: torch.Tensor,
+        foil_embeds: torch.Tensor,
+        temperature: Optional[float] = None,
+    ) -> torch.Tensor:
+        """
+        Scores external foil candidates (e.g. from PersistentMemoryBank) against fused context.
+
+        Args:
+            context_embed: [B, context_dim] Fused multimodal state.
+            foil_embeds: [B, M, candidate_dim] Candidate foil representations.
+
+        Returns:
+            foil_logits: [B, M] Scaled decision logits for the foils.
+        """
+        B, M, _ = foil_embeds.shape
+        if M == 0:
+            return torch.zeros((B, 0), device=context_embed.device, dtype=context_embed.dtype)
+
+        ctx_proj = self.context_proj(context_embed)  # [B, scoring_dim]
+        cnd_proj = self.candidate_proj(foil_embeds)   # [B, M, scoring_dim]
+
+        ctx_expanded = ctx_proj.unsqueeze(1).expand(-1, M, -1)  # [B, M, scoring_dim]
+        dot_scores = (ctx_expanded * cnd_proj).sum(dim=-1) / math.sqrt(self.scoring_dim)
+        concat_interact = torch.cat([ctx_expanded, cnd_proj], dim=-1)
+        mlp_scores = self.interaction_mlp(concat_interact).squeeze(-1)
+        raw_logits = dot_scores + mlp_scores
+
+        if temperature is not None:
+            temp = torch.tensor(max(0.01, float(temperature)), device=foil_embeds.device)
+        else:
+            temp = torch.clamp(self.log_temp.exp(), min=0.01, max=100.0)
+
+        return raw_logits / temp
+
     def predict_boolean_noul(self, context_embed: torch.Tensor) -> torch.Tensor:
         """Computes Jev-style binary verification certainty [0.0, 1.0]."""
         return torch.sigmoid(self.boolean_head(context_embed)).squeeze(-1)
@@ -193,10 +229,14 @@ class DynamicDecisionHead(nn.Module):
         margin: float = 0.5,
         contrastive_lambda: float = 0.0,
         label_smoothing: float = 0.0,
+        global_foil_logits: Optional[torch.Tensor] = None,
+        global_foil_mask: Optional[torch.Tensor] = None,
+        global_margin: Optional[float] = None,
+        global_lambda: float = 1.0,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Computes total loss combining cross-entropy and contrastive margin loss:
-            L_total = L_CE + lambda * max(0, gamma - (s_pos - s_hard_neg))
+            L_total = L_CE + lambda * (L_local_margin + global_lambda * L_global_margin)
 
         Returns:
             total_loss: L_total
@@ -210,6 +250,10 @@ class DynamicDecisionHead(nn.Module):
                 targets=targets,
                 candidate_mask=candidate_mask,
                 margin=margin,
+                global_foil_logits=global_foil_logits,
+                global_foil_mask=global_foil_mask,
+                global_margin=global_margin,
+                global_lambda=global_lambda,
             )
             total_loss = ce_loss + contrastive_lambda * margin_loss
         else:
@@ -226,10 +270,15 @@ def contrastive_margin_loss(
     margin: float = 0.5,
     hard_neg_indices: Optional[torch.Tensor] = None,
     reduction: str = "mean",
+    global_foil_logits: Optional[torch.Tensor] = None,
+    global_foil_mask: Optional[torch.Tensor] = None,
+    global_margin: Optional[float] = None,
+    global_lambda: float = 1.0,
 ) -> torch.Tensor:
     """
     Computes pairwise contrastive margin loss between ground truth and hard negative candidates:
         L_margin = max(0, gamma - (s_pos - s_hard_neg))
+    Supports both local candidate foils and global foils from PersistentMemoryBank.
 
     Args:
         logits: [B, K] Decision logits across candidates.
@@ -240,6 +289,10 @@ def contrastive_margin_loss(
                           If None, dynamically mines the hardest negative in the candidate set:
                           s_hard_neg = max_{j != target, mask[j]} logits[j].
         reduction: "mean", "sum", or "none".
+        global_foil_logits: Optional [B, M] decision logits of global bank foils.
+        global_foil_mask: Optional [B, M] boolean mask of valid global bank foils.
+        global_margin: Optional float margin for global foils (defaults to margin).
+        global_lambda: Scaling factor for global foil margin loss.
 
     Returns:
         Loss tensor according to reduction mode.
@@ -265,7 +318,6 @@ def contrastive_margin_loss(
         )
 
         # Hardest negative is the maximum among valid negative candidates.
-        # Use argmax + gather for hardware portability (DirectML autograd lacks multidimensional scatter support).
         hard_neg_idx = neg_logits.argmax(dim=-1, keepdim=True)
         s_hard_neg = neg_logits.gather(1, hard_neg_idx).squeeze(1)  # [B]
 
@@ -277,8 +329,32 @@ def contrastive_margin_loss(
     valid_neg_mask = s_hard_neg > -1e8
     loss = torch.where(valid_neg_mask, loss, torch.zeros_like(loss))
 
+    # Global foil contrast from PersistentMemoryBank [AO-23]
+    valid_global = torch.zeros(B, dtype=torch.bool, device=device)
+    if global_foil_logits is not None and global_foil_logits.shape[-1] > 0:
+        if global_foil_mask is not None:
+            masked_global = torch.where(
+                global_foil_mask,
+                global_foil_logits,
+                torch.tensor(-1e9, device=device, dtype=global_foil_logits.dtype),
+            )
+        else:
+            masked_global = global_foil_logits
+
+        hard_global_idx = masked_global.argmax(dim=-1, keepdim=True)
+        s_hard_global = masked_global.gather(1, hard_global_idx).squeeze(1)  # [B]
+
+        g_margin = margin if global_margin is None else float(global_margin)
+        global_margin_diff = g_margin - (s_pos - s_hard_global)
+        global_loss = F.relu(global_margin_diff)
+
+        valid_global = s_hard_global > -1e8
+        global_loss = torch.where(valid_global, global_loss, torch.zeros_like(global_loss))
+        loss = loss + (global_lambda * global_loss)
+
     if reduction == "mean":
-        num_valid = valid_neg_mask.sum().float().clamp(min=1.0)
+        total_valid = valid_neg_mask | valid_global
+        num_valid = total_valid.sum().float().clamp(min=1.0)
         return loss.sum() / num_valid
     elif reduction == "sum":
         return loss.sum()

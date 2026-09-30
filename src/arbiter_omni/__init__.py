@@ -15,6 +15,7 @@ from arbiter_omni.data.dataset import (
     MultimodalDecisionDataset,
     collate_multimodal_decision,
 )
+from arbiter_omni.data.memory_bank import PersistentMemoryBank
 
 from arbiter_omni.data.miner import (
     DEFAULT_CANDIDATE_POOL,
@@ -70,6 +71,7 @@ __all__ = [
     "MultimodalDecisionDataset",
     "MultimodalSample",
     "OpenCLIPMultimodalEncoder",
+    "PersistentMemoryBank",
     "SpatioTemporalVideoAttention",
     "System2EscalationGate",
 
