@@ -99,6 +99,7 @@ class SoftTopKRouter(nn.Module):
         logits = self.gate(x)
         # Routing probabilities
         probs = F.softmax(logits, dim=-1)  # [N, num_experts]
+        self.last_probs = probs.detach()
 
         # Top-K selection (broadcast-based, hardware-agnostic for DirectML / ROCm / CUDA)
         top_k_indices = torch.topk(probs.detach(), self.top_k, dim=-1)[1]
@@ -157,11 +158,13 @@ class SparseMoETransformerBlock(nn.Module):
         ffn_dim: Optional[int] = None,
         num_heads: int = 4,
         dropout: float = 0.1,
+        use_shared_expert: bool = False,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_experts = num_experts
         self.top_k = top_k
+        self.use_shared_expert = use_shared_expert
         _ffn_dim = ffn_dim or (hidden_dim * 4)
 
         # Self-attention sub-layer (standard)
@@ -181,6 +184,12 @@ class SparseMoETransformerBlock(nn.Module):
             for _ in range(num_experts)
         ])
 
+        # DeepSeek-V3 style Shared Invariant Expert (always active for all tokens)
+        if use_shared_expert:
+            self.shared_expert = ExpertFFN(hidden_dim=hidden_dim, ffn_dim=_ffn_dim, dropout=dropout)
+        else:
+            self.shared_expert = None
+
         # Cached aux loss from the most recent forward (reset each call)
         self._last_aux_loss: torch.Tensor = torch.tensor(0.0)
 
@@ -188,6 +197,13 @@ class SparseMoETransformerBlock(nn.Module):
     def last_aux_loss(self) -> torch.Tensor:
         """Returns the load-balancing auxiliary loss from the most recent forward pass."""
         return self._last_aux_loss
+
+    @property
+    def last_routing_distribution(self) -> Optional[torch.Tensor]:
+        """Returns the routing probability distribution from the most recent forward pass."""
+        if hasattr(self.router, "last_probs") and self.router.last_probs is not None:
+            return self.router.last_probs.mean(dim=0)
+        return None
 
     def forward(
         self,
@@ -224,6 +240,10 @@ class SparseMoETransformerBlock(nn.Module):
         # Compute weighted combination of expert outputs
         # Efficiency: compute only experts that receive at least one token
         moe_out = torch.zeros_like(x_flat)
+
+        # DeepSeek-V3: 1 Shared Expert unconditionally active across all tokens
+        if self.shared_expert is not None:
+            moe_out = moe_out + self.shared_expert(x_flat)
 
         for k_idx in range(self.top_k):
             expert_ids = top_k_indices[:, k_idx]   # [N] — which expert for slot k
@@ -280,12 +300,14 @@ class SparseMoEMultimodalFusion(nn.Module):
         ffn_dim: Optional[int] = None,
         num_heads: int = 4,
         dropout: float = 0.1,
+        use_shared_expert: bool = False,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_moe_layers = num_moe_layers
         self.num_experts = num_experts
         self.top_k = top_k
+        self.use_shared_expert = use_shared_expert
 
         self.layers = nn.ModuleList([
             SparseMoETransformerBlock(
@@ -295,10 +317,34 @@ class SparseMoEMultimodalFusion(nn.Module):
                 ffn_dim=ffn_dim,
                 num_heads=num_heads,
                 dropout=dropout,
+                use_shared_expert=use_shared_expert,
             )
             for _ in range(num_moe_layers)
         ])
         self.output_norm = nn.LayerNorm(hidden_dim)
+
+    EXPERT_NAMES = [
+        "Spatial-Geometric",
+        "Temporal-Kinematic",
+        "Cross-Modal Audiovisual",
+        "Adversarial Discrepancy",
+    ]
+
+    def get_routing_distribution(self) -> List[Dict[str, float]]:
+        """Returns the layer-by-layer routing distribution across domain experts for UI telemetry."""
+        distributions = []
+        for i, layer in enumerate(self.layers):
+            layer_dict = {}
+            if getattr(layer, "use_shared_expert", False) and layer.shared_expert is not None:
+                layer_dict["Shared-Invariant"] = 1.0
+            r_dist = layer.last_routing_distribution
+            if r_dist is not None:
+                r_cpu = r_dist.cpu().tolist()
+                for e_idx, p_val in enumerate(r_cpu):
+                    name = self.EXPERT_NAMES[e_idx] if e_idx < len(self.EXPERT_NAMES) else f"Expert-{e_idx}"
+                    layer_dict[name] = float(p_val)
+            distributions.append(layer_dict)
+        return distributions
 
     @property
     def accumulated_aux_loss(self) -> torch.Tensor:

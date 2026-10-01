@@ -28,6 +28,8 @@ from arbiter_omni import (
 from examples.interactive_demo import (
     build_app,
     predict_streaming_arbitration,
+    predict_dual_streaming_arbitration,
+    predict_brain_map,
 )
 
 
@@ -151,6 +153,128 @@ class TestV5EngineResolution:
             assert res.confidence > 0.0
 
     def test_build_app_includes_streaming_tab(self):
-        """build_app() constructs Gradio application containing both tabs."""
+        """build_app() constructs Gradio application containing all tabs."""
         app = build_app()
         assert app is not None
+
+
+class TestDualStreamSensorium:
+    """Tests for continuous dual-stream (video + audio) sensorium [AO-32]."""
+
+    def test_dual_streaming_without_inputs(self):
+        """predict_dual_streaming_arbitration handles None video and None audio gracefully."""
+        winner_md, probs, conf, entropy, lat, conformal_md = predict_dual_streaming_arbitration(
+            frame=None,
+            audio=None,
+            question="What is the active robotic protocol?",
+            candidates_raw="Hold position, Advance cautiously, Halt immediately",
+            temperature=0.5,
+        )
+        assert "Current Action" in winner_md
+        assert len(probs) == 3
+        assert 0.0 <= conf <= 1.0
+        assert entropy >= 0.0
+        assert lat >= 0.0
+        assert "Certified Conformal Set" in conformal_md
+        assert abs(sum(probs.values()) - 1.0) < 1e-3
+
+    def test_dual_streaming_with_frame_and_audio(self):
+        """predict_dual_streaming_arbitration processes concurrent video frame and audio waveform."""
+        frame = Image.new("RGB", (224, 224), color=(200, 100, 50))
+        audio = np.random.randn(16000).astype(np.float32)
+        winner_md, probs, conf, entropy, lat, conformal_md = predict_dual_streaming_arbitration(
+            frame=frame,
+            audio=audio,
+            question="Analyze sensorium state",
+            candidates_raw="Clear path / continue, Auditory warning / halt, Visual obstacle / detour",
+            temperature=0.4,
+        )
+        assert len(probs) == 3
+        assert conf > 0.0
+        assert "Certified Conformal Set" in conformal_md
+        assert lat >= 0.0
+
+    def test_dual_streaming_audio_tuple(self):
+        """predict_dual_streaming_arbitration accepts audio tuple (sample_rate, waveform)."""
+        audio_tuple = (16000, np.zeros((16000, 2), dtype=np.float32))
+        winner_md, probs, conf, entropy, lat, conformal_md = predict_dual_streaming_arbitration(
+            frame=None,
+            audio=audio_tuple,
+            question="Voice alert detected",
+            candidates_raw="Acknowledge, Ignore",
+        )
+        assert len(probs) == 2
+        assert "Current Action" in winner_md
+
+
+class TestV6EngineAndBrainMap:
+    """Tests for ArbiterOmni v6 Brain Map telemetry and architecture resolution [AO-33]."""
+
+    def test_predict_brain_map_telemetry(self):
+        """predict_brain_map returns all 4 diagnostic panels with MoE routing and tournament."""
+        dec_md, gate_md, routing_md, tourn_md = predict_brain_map(
+            question="Tactical decision inquiry",
+            candidates_raw="Maneuver A, Maneuver B, Maneuver C",
+            deliberation_passes=3,
+        )
+        assert "Winning Candidate" in dec_md
+        assert "Speculative Draft" in gate_md
+        assert "Shared + Domain-Specialized MoE Routing" in routing_md
+        assert "Shared Invariant" in routing_md
+        assert "Test-Time Deliberation Tournament" in tourn_md
+
+    def test_v6_model_config_loading_with_speculative_head(self):
+        """Engine correctly creates MoE model with speculative draft head from v6 checkpoint."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_path = os.path.join(tmpdir, "arbiter_omni_v6.pt")
+            encoder = MockMultimodalEncoder(embed_dim=128)
+            model = ArbiterOmniModel(
+                encoder=encoder,
+                hidden_dim=64,
+                scoring_dim=64,
+                use_moe=True,
+                moe_num_layers=2,
+                moe_num_experts=4,
+                moe_top_k=2,
+                use_shared_expert=True,
+                enable_speculative=True,
+            )
+            state = {
+                "fusion": model.fusion.state_dict(),
+                "decision_head": model.decision_head.state_dict(),
+                "speculative_head": model.speculative_head.state_dict(),
+                "model_config": {
+                    "hidden_dim": 64,
+                    "scoring_dim": 64,
+                    "num_layers": 2,
+                    "num_heads": 4,
+                    "model_name": "mock",
+                    "use_moe": True,
+                    "moe_num_layers": 2,
+                    "moe_num_experts": 4,
+                    "moe_top_k": 2,
+                    "use_shared_expert": True,
+                    "enable_speculative_early_exit": True,
+                },
+            }
+            torch.save(state, ckpt_path)
+
+            engine = ArbiterOmniEngine.from_pretrained(
+                ckpt_path,
+                encoder_type="mock",
+                device="cpu",
+                embed_dim=128,
+            )
+            assert engine.model.fusion.use_moe is True
+            assert engine.model.fusion.moe_transformer is not None
+            assert getattr(engine.model, "enable_speculative_early_exit", False) is True
+            assert getattr(engine.model, "speculative_head", None) is not None
+
+            res = engine.decide(
+                question="What action?",
+                candidates=["Action 1", "Action 2"],
+                text="Sensors nominal.",
+            )
+            assert res.decision in ["Action 1", "Action 2"]
+            assert res.confidence > 0.0
+

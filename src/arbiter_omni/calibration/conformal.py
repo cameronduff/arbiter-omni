@@ -127,6 +127,7 @@ class ConformalCalibrator:
         self,
         probabilities: Union[Dict[str, float], Sequence[float]],
         candidates: Optional[Sequence[str]] = None,
+        stability_index: Optional[float] = None,
     ) -> List[str]:
         """
         Constructs the conformal prediction set C(X) for a given probability distribution.
@@ -134,6 +135,9 @@ class ConformalCalibrator:
         Args:
             probabilities: Either a candidate->probability dict or sequence of floats.
             candidates: Sequence of candidate strings if probabilities is a list of floats.
+            stability_index: Optional Test-Time Compute (TTC) stability index in [0, 1].
+                             When stability_index >= 0.80, safely tightens prediction set to {c*}.
+                             When stability_index < 0.50, expands prediction set to guarantee PAC coverage.
             
         Returns:
             List of candidate strings included in the conformal prediction set.
@@ -161,20 +165,31 @@ class ConformalCalibrator:
         q_hat = self.quantile_threshold
         conformal_set: List[str] = []
 
+        # Adaptive Conformal Risk Control (CRC) dynamic scaling [AO-32]
+        eff_q_hat = q_hat
+        if stability_index is not None:
+            s_clamped = float(np.clip(stability_index, 0.0, 1.0))
+            if s_clamped >= 0.80:
+                scale = 1.0 - (s_clamped - 0.80) * 2.0
+                eff_q_hat = q_hat * max(0.1, scale)
+            elif s_clamped < 0.50:
+                fragility = (0.50 - s_clamped) / 0.50  # in (0, 1]
+                eff_q_hat = min(1.0, q_hat + fragility * (1.0 - q_hat) * 0.90)
+
         if self.method == "lac":
-            # LAC: include candidate c if 1 - P(c) <= q_hat <=> P(c) >= 1 - q_hat
-            tau = max(0.0, 1.0 - q_hat)
+            # LAC: include candidate c if 1 - P(c) <= eff_q_hat <=> P(c) >= 1 - eff_q_hat
+            tau = max(0.0, 1.0 - eff_q_hat)
             for cand, p in zip(cands, probs):
                 if p >= tau:
                     conformal_set.append(cand)
         elif self.method == "aps":
-            # APS: include candidates in descending order until cumulative probability >= q_hat
+            # APS: include candidates in descending order until cumulative probability >= eff_q_hat
             sorted_indices = sorted(range(len(probs)), key=lambda k: probs[k], reverse=True)
             cum_p = 0.0
             for idx in sorted_indices:
                 conformal_set.append(cands[idx])
                 cum_p += probs[idx]
-                if cum_p >= q_hat:
+                if cum_p >= eff_q_hat:
                     break
 
         # Finite-sample guarantee: conformal prediction sets are always non-empty

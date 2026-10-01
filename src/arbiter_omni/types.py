@@ -62,11 +62,50 @@ class DecisionResult(BaseModel):
         default=None,
         description="Diagnostic reason for System 2 escalation if triggered.",
     )
+    speculative_early_exit: bool = Field(
+        default=False,
+        description="Flag indicating whether decision exited early via Tier-0 draft head [AO-29].",
+    )
+    draft_telemetry: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Diagnostic telemetry from Tier-0 Speculative Draft head if evaluated.",
+    )
+    deliberation_passes: int = Field(
+        default=1,
+        description="Number of Test-Time Compute (TTC) deliberation tournament passes evaluated [AO-31].",
+    )
+    tournament_bracket: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Details of Test-Time Deliberation tournament against memory-bank foils [AO-31].",
+    )
+    active_experts: Optional[List[Dict[str, float]]] = Field(
+        default=None,
+        description="Layer-by-layer MoE expert routing distributions for Brain Map telemetry [AO-30, AO-33].",
+    )
+
+    stability_index: Optional[float] = Field(
+        default=None,
+        description="Epistemic stability index derived from Test-Time Deliberation [AO-31, AO-32].",
+    )
+    deliberation_summary: Optional[Any] = Field(
+        default=None,
+        description="Full summary from Test-Time Deliberation tournament [AO-31].",
+    )
 
     @property
     def decision(self) -> str:
         """Alias for top-1 winner decision."""
         return self.winner
+
+    @property
+    def is_speculative(self) -> bool:
+        """Alias for speculative early exit."""
+        return self.speculative_early_exit
+
+    @property
+    def prediction_set(self) -> List[str]:
+        """Alias for conformal prediction set."""
+        return self.conformal_set
 
 
 

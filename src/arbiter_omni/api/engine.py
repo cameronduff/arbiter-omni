@@ -7,11 +7,18 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Union
 import os
+import time
 import torch
 import torch.nn.functional as F
 
 from arbiter_omni.calibration.conformal import ConformalCalibrator, System2EscalationGate
+from arbiter_omni.calibration.deliberator import (
+    TestTimeDeliberator,
+    TestTimeDeliberationSummary,
+    TournamentBracket,
+)
 from arbiter_omni.calibration.temperature import CalibrationSummary, TemperatureCalibrator
+from arbiter_omni.data.memory_bank import PersistentMemoryBank
 from arbiter_omni.encoders.base import BaseMultimodalEncoder
 from arbiter_omni.encoders.mock import MockMultimodalEncoder
 from arbiter_omni.encoders.openclip import OpenCLIPMultimodalEncoder
@@ -49,6 +56,33 @@ class ArbiterOmniEngine:
         self.escalation_gate = System2EscalationGate()
         self.temperature_calibrator = TemperatureCalibrator()
         self.temperature: Optional[float] = None
+
+        # Test-Time Compute (TTC) Deliberator [AO-31]
+        self.memory_bank: Optional[PersistentMemoryBank] = None
+        self.deliberator = TestTimeDeliberator()
+        self.enable_test_time_deliberation: bool = False
+
+    def attach_memory_bank(self, memory_bank: PersistentMemoryBank) -> None:
+        """Attaches a resident memory bank to the engine and deliberator for adversarial foil testing [AO-23, AO-31]."""
+        self.memory_bank = memory_bank
+        self.deliberator.memory_bank = memory_bank
+
+    def configure_deliberator(
+        self,
+        num_passes: int = 3,
+        router_noise_std: float = 0.05,
+        foil_k: int = 6,
+        min_foil_margin: float = 0.20,
+        stability_threshold: float = 0.70,
+        enabled: bool = True,
+    ) -> None:
+        """Configures Test-Time Compute (TTC) deliberation parameters [AO-31]."""
+        self.deliberator.num_passes = num_passes
+        self.deliberator.router_noise_std = router_noise_std
+        self.deliberator.foil_k = foil_k
+        self.deliberator.min_foil_margin = min_foil_margin
+        self.deliberator.stability_threshold = stability_threshold
+        self.enable_test_time_deliberation = enabled
 
 
     @classmethod
@@ -168,11 +202,11 @@ class ArbiterOmniEngine:
             elif "scoring_net.0.weight" in head_sd:
                 kwargs["scoring_dim"] = head_sd["scoring_net.0.weight"].shape[0]
 
-        # MoE configuration [AO-27, AO-28]
+        # MoE configuration [AO-27, AO-28, AO-30]
         if "use_moe" not in kwargs:
             if "use_moe" in m_cfg:
                 kwargs["use_moe"] = m_cfg["use_moe"]
-            elif any(k.startswith("moe_transformer.") for k in fusion_sd.keys()) or "v5" in str(path):
+            elif any(k.startswith("moe_transformer.") for k in fusion_sd.keys()) or "v5" in str(path) or "v6" in str(path):
                 kwargs["use_moe"] = True
 
         if kwargs.get("use_moe", False):
@@ -182,6 +216,15 @@ class ArbiterOmniEngine:
                 kwargs["moe_num_experts"] = m_cfg.get("moe_num_experts", 4)
             if "moe_top_k" not in kwargs:
                 kwargs["moe_top_k"] = m_cfg.get("moe_top_k", 2)
+            if "use_shared_expert" not in kwargs:
+                kwargs["use_shared_expert"] = m_cfg.get("use_shared_expert", ("v6" in str(path)))
+
+        # Speculative draft configuration [AO-29]
+        if "enable_speculative_early_exit" not in kwargs:
+            if "enable_speculative_early_exit" in m_cfg:
+                kwargs["enable_speculative_early_exit"] = m_cfg["enable_speculative_early_exit"]
+            elif "v6" in str(path):
+                kwargs["enable_speculative_early_exit"] = True
 
         if "num_layers" not in kwargs:
             if "num_layers" in m_cfg:
@@ -202,19 +245,19 @@ class ArbiterOmniEngine:
         if "enable_spatial_cross_attention" not in kwargs:
             if "enable_spatial_cross_attention" in m_cfg:
                 kwargs["enable_spatial_cross_attention"] = m_cfg["enable_spatial_cross_attention"]
-            elif any(k.startswith("spatial_cross_attn") for k in fusion_sd.keys()):
+            elif any(k.startswith("spatial_cross_attn") for k in fusion_sd.keys()) or "v6" in str(path):
                 kwargs["enable_spatial_cross_attention"] = True
 
         if "max_spatial_patches" not in kwargs:
             if "max_spatial_patches" in m_cfg:
                 kwargs["max_spatial_patches"] = m_cfg["max_spatial_patches"]
-            elif "v4" in str(path) or "v5" in str(path):
+            elif "v4" in str(path) or "v5" in str(path) or "v6" in str(path):
                 kwargs["max_spatial_patches"] = 980
 
         if "openclip_model" not in kwargs:
             if "model_name" in m_cfg:
                 kwargs["openclip_model"] = m_cfg["model_name"]
-            elif "v5" in str(path):
+            elif "v6" in str(path) or "v5" in str(path):
                 kwargs["openclip_model"] = "ViT-SO400M-14-SigLIP-384"
             elif "v4" in str(path) or "v3" in str(path):
                 kwargs["openclip_model"] = "ViT-B-16-SigLIP"
@@ -226,7 +269,7 @@ class ArbiterOmniEngine:
         return engine
 
     def load_weights(self, weights_path: str):
-        """Loads trained fusion and decision head weights."""
+        """Loads trained fusion, decision head, and speculative weights."""
         try:
             checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
         except TypeError:
@@ -234,6 +277,8 @@ class ArbiterOmniEngine:
         if "fusion" in checkpoint and "decision_head" in checkpoint:
             self.model.fusion.load_state_dict(checkpoint["fusion"], strict=False)
             self.model.decision_head.load_state_dict(checkpoint["decision_head"], strict=False)
+            if "speculative_head" in checkpoint and getattr(self.model, "speculative_head", None) is not None:
+                self.model.speculative_head.load_state_dict(checkpoint["speculative_head"], strict=False)
         else:
             self.model.load_state_dict(checkpoint, strict=False)
         self.model.eval()
@@ -364,6 +409,7 @@ class ArbiterOmniEngine:
         use_prompt_ensembling: Optional[bool] = None,
         prompt_templates: Optional[Sequence[str]] = None,
         temperature: Optional[float] = None,
+        test_time_deliberate: Optional[bool] = None,
     ) -> DecisionResult:
         """
         Evaluates multimodal state and returns calibrated probability distribution over candidates.
@@ -380,6 +426,7 @@ class ArbiterOmniEngine:
                                   across descriptive templates to sharpen zero-shot visual alignment.
             prompt_templates: Optional custom templates (e.g. ['a photo of a {}', '{}']).
             temperature: Optional inference temperature for output sharpening (<1.0) or softening (>1.0).
+            test_time_deliberate: If True, triggers Test-Time Compute (TTC) multi-pass deliberation and foil stress-testing [AO-31].
             
         Returns:
             DecisionResult containing top choice, full probabilities, entropy, and metrics.
@@ -403,6 +450,61 @@ class ArbiterOmniEngine:
             use_prompt_ensembling = (image is not None or video is not None)
 
         temp_to_use = temperature if temperature is not None else self.temperature
+
+        # Tier-0 Speculative Draft Arbitration check [AO-29]
+        draft_telemetry = None
+        if getattr(self.model, "enable_speculative_early_exit", False) and getattr(self.model, "speculative_head", None) is not None:
+            t_spec_start = time.perf_counter()
+            with torch.no_grad():
+                q_embed, mod_embeds, pres_mask, _ = self.model.encode_inputs(
+                    questions=[question], texts=[text], images=[image], videos=[video], audios=[audio]
+                )
+                cnd_embeds, cnd_mask = self.model.encode_candidates(
+                    [candidates],
+                    prompt_templates=prompt_templates,
+                    use_prompt_ensembling=use_prompt_ensembling,
+                )
+                _, draft_probs, draft_ent, can_exit, margins, _ = self.model.forward_speculative(
+                    question_embed=q_embed,
+                    candidate_embeds=cnd_embeds,
+                    candidate_mask=cnd_mask,
+                    modality_embeds=mod_embeds,
+                    presence_mask=pres_mask,
+                    temperature=temp_to_use,
+                )
+                draft_lat_ms = (time.perf_counter() - t_spec_start) * 1000.0
+
+            dp_vec = draft_probs[0].cpu().numpy().tolist()
+            d_prob_dict = {cand: float(p) for cand, p in zip(candidates, dp_vec)}
+            w_idx = int(torch.argmax(draft_probs[0]).item())
+
+            draft_telemetry = {
+                "early_exit_taken": bool(can_exit[0].item()),
+                "draft_winner": candidates[w_idx],
+                "draft_confidence": float(dp_vec[w_idx]),
+                "draft_margin": float(margins[0].item()),
+                "draft_entropy": float(draft_ent[0].item()),
+                "draft_latency_ms": draft_lat_ms,
+            }
+
+            if can_exit[0].item():
+                # Certified high-margin early exit: bypass deep MoE layers entirely (<0.5 ms)!
+                conformal_set = self.conformal_calibrator.predict_set(d_prob_dict)
+                return DecisionResult(
+                    question=question,
+                    winner=candidates[w_idx],
+                    winner_index=w_idx,
+                    confidence=float(dp_vec[w_idx]),
+                    probabilities=d_prob_dict,
+                    entropy=float(draft_ent[0].item()),
+                    active_modalities=active,
+                    speculative_early_exit=True,
+                    draft_telemetry=draft_telemetry,
+                    deliberation_passes=1,
+                    active_experts=[{"Shared-Invariant": 1.0, "Tier-0 Speculative Draft": 1.0}],
+                    conformal_set=conformal_set,
+                    escalate_system2=False,
+                )
 
         self.model.eval()
         with torch.no_grad():
@@ -438,13 +540,46 @@ class ArbiterOmniEngine:
             "calibrated_certainty": abs(noul_cert - 0.5) * 2.0,
         }
 
-        # Conformal prediction set & System 2 escalation check
-        conformal_set = self.conformal_calibrator.predict_set(prob_dict)
+        # Test-Time Compute (TTC) Deliberation Tournament [AO-31]
+        delib_summary = None
+        should_deliberate = (test_time_deliberate if test_time_deliberate is not None else self.enable_test_time_deliberation)
+        if should_deliberate and self.deliberator is not None:
+            cnd_embeds, cnd_mask = self.model.encode_candidates(
+                [candidates],
+                prompt_templates=prompt_templates,
+                use_prompt_ensembling=use_prompt_ensembling,
+            )
+            _, mod_embeds, pres_mask, _ = self.model.encode_inputs(
+                questions=[question], texts=[text], images=[image], videos=[video], audios=[audio]
+            )
+            delib_summary = self.deliberator.deliberate(
+                context_embed=fused_context,
+                candidate_embeds=cnd_embeds,
+                candidates=candidates,
+                decision_head=self.model.decision_head,
+                candidate_mask=cnd_mask,
+                modality_embeds=mod_embeds,
+                presence_mask=pres_mask,
+                temperature=temp_to_use,
+            )
+            prob_dict = delib_summary.calibrated_probabilities
+            winner = max(prob_dict, key=prob_dict.get)
+            winner_idx = list(candidates).index(winner)
+            confidence = prob_dict[winner]
+
+        # Adaptive Conformal Risk Control (CRC) prediction set & escalation check [AO-08, AO-32]
+        stab_idx = delib_summary.stability_index if delib_summary is not None else None
+        conformal_set = self.conformal_calibrator.predict_set(prob_dict, stability_index=stab_idx)
         escalate, reason = self.escalation_gate.evaluate(
             confidence=confidence,
             entropy=ent,
             conformal_set=conformal_set,
         )
+        if delib_summary is not None and not delib_summary.certified_stable:
+            escalate = True
+            reason = delib_summary.escalate_reason or "DELIBERATION_FRAGILITY"
+
+        active_experts = self.model.get_routing_distribution() if hasattr(self.model, "get_routing_distribution") else None
 
         return DecisionResult(
             question=question,
@@ -460,6 +595,13 @@ class ArbiterOmniEngine:
             conformal_set=conformal_set,
             escalate_system2=escalate,
             escalation_reason=reason,
+            speculative_early_exit=False,
+            draft_telemetry=draft_telemetry,
+            active_experts=active_experts,
+            deliberation_passes=delib_summary.deliberation_passes if delib_summary is not None else 1,
+            tournament_bracket=delib_summary.tournament_bracket.model_dump() if (delib_summary and delib_summary.tournament_bracket) else None,
+            stability_index=stab_idx,
+            deliberation_summary=delib_summary,
         )
 
 

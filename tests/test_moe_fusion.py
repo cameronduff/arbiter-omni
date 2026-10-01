@@ -471,3 +471,51 @@ class TestArbiterOmniWithMoE:
             )
         assert not torch.isnan(logits).any()
         assert not torch.isnan(probs).any()
+
+    def test_shared_expert_in_sparse_moe_block(self):
+        """DeepSeek-V3 Shared Expert is active for all tokens and receives gradients [AO-30]."""
+        block = SparseMoETransformerBlock(
+            hidden_dim=32,
+            num_experts=4,
+            top_k=2,
+            ffn_dim=64,
+            num_heads=2,
+            use_shared_expert=True,
+        )
+        assert block.shared_expert is not None
+        x = torch.randn(2, 4, 32, requires_grad=True)
+        out = block(x)
+        assert out.shape == (2, 4, 32)
+
+        loss = out.sum()
+        loss.backward()
+        # Verify gradient flows to shared expert
+        shared_grad = next(block.shared_expert.parameters()).grad
+        assert shared_grad is not None
+        assert shared_grad.abs().sum() > 0
+
+    def test_moe_routing_distribution_telemetry(self):
+        """Routing distribution telemetry correctly reports all 4 domain experts and shared expert [AO-30]."""
+        fusion = SparseMoEMultimodalFusion(
+            hidden_dim=32,
+            num_moe_layers=2,
+            num_experts=4,
+            top_k=2,
+            use_shared_expert=True,
+        )
+        x = torch.randn(2, 6, 32)
+        out = fusion(x)
+        assert out.shape == (2, 6, 32)
+
+        dists = fusion.get_routing_distribution()
+        assert len(dists) == 2
+        for layer_dict in dists:
+            assert "Shared-Invariant" in layer_dict
+            assert layer_dict["Shared-Invariant"] == 1.0
+            assert "Spatial-Geometric" in layer_dict
+            assert "Temporal-Kinematic" in layer_dict
+            assert "Cross-Modal Audiovisual" in layer_dict
+            assert "Adversarial Discrepancy" in layer_dict
+            # Sum of routed probabilities equals 1.0
+            routed_sum = sum(v for k, v in layer_dict.items() if k != "Shared-Invariant")
+            assert pytest.approx(routed_sum, abs=1e-3) == 1.0

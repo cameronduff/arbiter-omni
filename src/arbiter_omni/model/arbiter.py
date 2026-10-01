@@ -15,6 +15,7 @@ from arbiter_omni.encoders.base import BaseMultimodalEncoder
 from arbiter_omni.fusion.base import BaseMultimodalFusion
 from arbiter_omni.fusion.transformer import TransformerMultimodalFusion
 from arbiter_omni.model.decision_head import DynamicDecisionHead
+from arbiter_omni.model.speculative import SpeculativeDraftHead, SpeculativeGate
 from arbiter_omni.types import ModalityType
 
 DEFAULT_PROMPT_TEMPLATES: Tuple[str, ...] = (
@@ -52,6 +53,12 @@ class ArbiterOmniModel(nn.Module):
         moe_num_layers: int = 4,
         moe_num_experts: int = 4,
         moe_top_k: int = 2,
+        use_shared_expert: bool = False,
+        enable_speculative_early_exit: bool = False,
+        speculative_head: Optional[SpeculativeDraftHead] = None,
+        speculative_margin_threshold: float = 0.45,
+        speculative_entropy_threshold: float = 0.40,
+        speculative_min_confidence: float = 0.65,
         **kwargs,
     ):
         super().__init__()
@@ -59,6 +66,7 @@ class ArbiterOmniModel(nn.Module):
         self.encoder.freeze()  # Guarantee encoders are frozen
         self.use_spatial_patches = use_spatial_patches
         self.modality_dropout_prob = modality_dropout_prob
+        self.enable_speculative_early_exit = enable_speculative_early_exit or kwargs.get("enable_speculative", False)
 
         # Setup default fusion if none supplied
         if fusion is None:
@@ -81,6 +89,7 @@ class ArbiterOmniModel(nn.Module):
                 moe_num_layers=moe_num_layers,
                 moe_num_experts=moe_num_experts,
                 moe_top_k=moe_top_k,
+                use_shared_expert=use_shared_expert,
             )
         else:
             self.fusion = fusion
@@ -95,6 +104,25 @@ class ArbiterOmniModel(nn.Module):
         else:
             self.decision_head = decision_head
 
+        # Setup Tier-0 Speculative Draft Head and Early-Exit Gate [AO-29]
+        if speculative_head is not None:
+            self.speculative_head = speculative_head
+        elif self.enable_speculative_early_exit:
+            self.speculative_head = SpeculativeDraftHead(
+                input_dim=self.encoder.text_dim,
+                candidate_dim=self.encoder.text_dim,
+                draft_dim=128,
+            )
+        else:
+            self.speculative_head = None
+
+        self.speculative_gate = SpeculativeGate(
+            margin_threshold=speculative_margin_threshold,
+            entropy_threshold=speculative_entropy_threshold,
+            min_confidence=speculative_min_confidence,
+            enabled=enable_speculative_early_exit,
+        )
+
     @property
     def moe_aux_loss(self) -> torch.Tensor:
         """Returns the MoE load-balancing auxiliary loss from the fusion module.
@@ -106,13 +134,21 @@ class ArbiterOmniModel(nn.Module):
             return self.fusion.moe_aux_loss
         return torch.tensor(0.0)
 
+    def get_routing_distribution(self) -> List[Dict[str, float]]:
+        """Returns layer-by-layer MoE expert routing distribution for Brain Map telemetry [AO-30, AO-33]."""
+        if hasattr(self.fusion, "get_routing_distribution"):
+            return self.fusion.get_routing_distribution()
+        return []
+
     @property
     def device(self) -> torch.device:
         return next(self.decision_head.parameters()).device
 
     def trainable_parameters(self) -> List[nn.Parameter]:
-        """Returns only trainable parameters (fusion + decision head), excluding frozen encoders."""
+        """Returns only trainable parameters (fusion + decision head + speculative head), excluding frozen encoders."""
         params = list(self.fusion.parameters()) + list(self.decision_head.parameters())
+        if self.speculative_head is not None:
+            params += list(self.speculative_head.parameters())
         return [p for p in params if p.requires_grad]
 
     def encode_inputs(
@@ -366,4 +402,51 @@ class ArbiterOmniModel(nn.Module):
         )
 
         return logits, probs, entropy, fused_context
+
+    def forward_speculative(
+        self,
+        question_embed: torch.Tensor,
+        candidate_embeds: torch.Tensor,
+        candidate_mask: Optional[torch.Tensor] = None,
+        modality_embeds: Optional[Dict[Any, torch.Tensor]] = None,
+        presence_mask: Optional[Dict[Any, Any]] = None,
+        temperature: Optional[float] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Fast Tier-0 Speculative Draft forward pass [AO-29].
+
+        Evaluates lightweight draft compatibility in GPU L1/L2 cache in <0.5 ms.
+        Returns:
+            logits: [B, K] draft decision logits
+            probs: [B, K] draft probability distribution
+            entropy: [B] draft entropy
+            can_exit: [B] boolean mask of whether early exit criteria are satisfied
+            margins: [B] difference between top-1 and top-2 probabilities
+            top1_conf: [B] top-1 confidence score
+        """
+        if self.speculative_head is None:
+            raise RuntimeError("Speculative head is not initialized. Pass enable_speculative_early_exit=True.")
+
+        img_embed = None
+        img_present = None
+        if modality_embeds is not None and presence_mask is not None:
+            for k in [ModalityType.IMAGE, "image", ModalityType.IMAGE.value]:
+                if k in modality_embeds:
+                    img_embed = modality_embeds[k]
+                    break
+            for k in [ModalityType.IMAGE, "image", ModalityType.IMAGE.value]:
+                if k in presence_mask:
+                    img_present = presence_mask[k]
+                    break
+
+        logits, probs, entropy = self.speculative_head(
+            input_embed=question_embed,
+            candidate_embeds=candidate_embeds,
+            candidate_mask=candidate_mask,
+            residual_visual_embed=img_embed,
+            visual_present=img_present,
+            temperature=temperature,
+        )
+        can_exit, margins, top1 = self.speculative_gate.should_exit(probs, entropy)
+        return logits, probs, entropy, can_exit, margins, top1
 

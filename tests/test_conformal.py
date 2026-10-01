@@ -179,3 +179,40 @@ def test_engine_conformal_and_escalation_integration():
     )
     assert res_forced_esc.escalate_system2 is True
     assert "ESCALATE_TO_SYSTEM_2" in res_forced_esc.escalation_reason
+
+def test_adaptive_conformal_risk_control_contraction_on_certified_stability():
+    """Verify Adaptive CRC contracts prediction sets to singleton on high test-time stability [AO-32]."""
+    probs = np.array([
+        [0.8, 0.2],
+        [0.7, 0.3],
+        [0.6, 0.4],
+        [0.9, 0.1],
+    ])
+    targets = np.array([0, 0, 0, 0])
+    calibrator = ConformalCalibrator(alpha=0.10, method="lac")
+    calibrator.calibrate(probs, targets)
+
+    test_probs = {"cand_1": 0.65, "cand_2": 0.35}
+    # Unconditioned calibration might include both or be borderline
+    # With certified test-time stability (e.g. 0.95), set tightens to singleton
+    c_set_stable = calibrator.predict_set(test_probs, stability_index=0.95)
+    assert c_set_stable == ["cand_1"]
+
+
+def test_adaptive_conformal_risk_control_expansion_on_fragility():
+    """Verify Adaptive CRC expands prediction set to cover alternative candidates on low stability [AO-32]."""
+    probs = np.array([
+        [0.95, 0.05],
+        [0.90, 0.10],
+        [0.85, 0.15],
+        [0.99, 0.01],
+    ])
+    targets = np.array([0, 0, 0, 0])
+    calibrator = ConformalCalibrator(alpha=0.10, method="lac")
+    calibrator.calibrate(probs, targets)
+
+    test_probs = {"cand_1": 0.55, "cand_2": 0.45}
+    # Under epistemic fragility / foil collision risk (stability_index = 0.15), set expands to guarantee coverage
+    c_set_fragile = calibrator.predict_set(test_probs, stability_index=0.15)
+    assert "cand_1" in c_set_fragile
+    assert "cand_2" in c_set_fragile

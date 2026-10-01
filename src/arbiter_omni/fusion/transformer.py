@@ -50,6 +50,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         moe_num_layers: int = 4,
         moe_num_experts: int = 4,
         moe_top_k: int = 2,
+        use_shared_expert: bool = False,
     ):
         super().__init__(hidden_dim=hidden_dim)
         self.num_heads = num_heads
@@ -59,6 +60,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         self.enable_spatial_cross_attention = enable_spatial_cross_attention
         self.max_spatial_patches = max_spatial_patches
         self.use_moe = use_moe
+        self.use_shared_expert = use_shared_expert
 
         # Projections for each input stream to shared hidden dimension
         self.projections = nn.ModuleDict()
@@ -88,7 +90,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
             )
             self.cross_norm = nn.LayerNorm(hidden_dim)
 
-        # ---- Transformer stack: dense OR Sparse MoE [AO-27] ----
+        # ---- Transformer stack: dense OR Sparse MoE [AO-27, AO-30] ----
         if use_moe:
             from arbiter_omni.fusion.moe import SparseMoEMultimodalFusion
             self.moe_transformer = SparseMoEMultimodalFusion(
@@ -99,6 +101,7 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
                 ffn_dim=dim_feedforward,
                 num_heads=num_heads,
                 dropout=dropout,
+                use_shared_expert=use_shared_expert,
             )
             self.transformer = None
             self.output_norm = nn.Identity()  # norm is inside SparseMoEMultimodalFusion
@@ -128,6 +131,12 @@ class TransformerMultimodalFusion(BaseMultimodalFusion):
         if self.moe_transformer is not None:
             return self.moe_transformer.accumulated_aux_loss
         return torch.tensor(0.0)
+
+    def get_routing_distribution(self) -> List[Dict[str, float]]:
+        """Returns layer-by-layer MoE routing distribution for telemetry and UI visualization [AO-30, AO-33]."""
+        if self.moe_transformer is not None and hasattr(self.moe_transformer, "get_routing_distribution"):
+            return self.moe_transformer.get_routing_distribution()
+        return []
 
     def forward(
         self,

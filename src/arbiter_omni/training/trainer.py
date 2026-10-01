@@ -504,8 +504,12 @@ class ArbiterOmniTrainer:
                 "moe_num_layers": getattr(getattr(fusion_mod, "moe_transformer", None), "num_moe_layers", 4),
                 "moe_num_experts": getattr(getattr(fusion_mod, "moe_transformer", None), "num_experts", 4),
                 "moe_top_k": getattr(getattr(fusion_mod, "moe_transformer", None), "top_k", 2),
+                "use_shared_expert": getattr(fusion_mod, "use_shared_expert", False),
+                "enable_speculative_early_exit": getattr(self.model, "enable_speculative_early_exit", False),
             },
         }
+        if getattr(self.model, "speculative_head", None) is not None:
+            state["speculative_head"] = self.model.speculative_head.state_dict()
         torch.save(state, path)
         logger.info(f"Saved trainable checkpoint to {path}")
 
