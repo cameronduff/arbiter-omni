@@ -152,18 +152,25 @@ class CLAPAudioEncoder(BaseMultimodalEncoder):
                     wave_tensor, (0, n_fft - wave_tensor.shape[-1])
                 )
 
-            # Compute complex STFT on CPU to ensure hardware portability (e.g. DirectML lacks ComplexFloat HLSL support)
+            # Compute complex STFT on CPU — DirectML lacks ComplexFloat HLSL support
             window = torch.hann_window(n_fft, device="cpu")
             spec = torch.stft(wave_tensor, n_fft=n_fft, window=window, return_complex=True)
-            spec_mag = torch.abs(spec).mean(dim=-1).squeeze(0).to(self.device)  # [freq_bins]
+            spec_mag = torch.abs(spec).mean(dim=-1).squeeze(0)  # [freq_bins] stays CPU
 
-            padded = torch.zeros(512, device=self.device)
+            # Derive the actual device from spectral_proj weights at runtime.
+            # self.device is set at init but the parent model may have been moved
+            # to a different device (e.g. DirectML privateuseone:0) via .to(device)
+            # after construction, so we must not rely on self.device here.
+            proj_device = self.spectral_proj.weight.device
+
+            padded = torch.zeros(512, device=proj_device)
             valid_len = min(512, spec_mag.shape[-1])
-            padded[:valid_len] = spec_mag[:valid_len]
+            padded[:valid_len] = spec_mag[:valid_len].to(proj_device)
 
             with torch.no_grad():
                 proj = self.spectral_proj(padded)
                 normed = proj / (proj.norm(dim=-1, keepdim=True) + 1e-8)
             results.append(normed)
 
-        return torch.stack(results).to(self.device)
+        out_device = self.spectral_proj.weight.device
+        return torch.stack(results).to(out_device)
