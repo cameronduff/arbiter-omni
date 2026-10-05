@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pt
+!checkpoints/*.pt
+*.pth
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+*.db
+
+# v6-Max artifacts exceed GitHub's 100 MB file limit; publish via Hugging Face instead
+checkpoints/*v6_max*
+checkpoints/smoke_*
+checkpoints/*.resume
+checkpoints/*.resume.*
+checkpoints/*.tmp
+checkpoints/*.jsonl
+checkpoints/*.jsonl.old
+logs/
+*.png
+linkedin_post.txt

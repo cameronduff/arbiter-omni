@@ -1,0 +1,236 @@
+{
+  "telemetry": {
+    "device": "cpu",
+    "device_type": "cpu",
+    "torch_version": "2.14.0+cu130",
+    "cuda_available": false,
+    "rocm_active": false,
+    "directml_available": false,
+    "cpu_count": 2,
+    "cpu_threads": 2,
+    "os_platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "gpu_name": "CPU / Emulated",
+    "total_vram_mb": null,
+    "allocated_vram_mb": null
+  },
+  "scienceqa": {
+    "dataset_name": "ScienceQA (derek-thomas/ScienceQA)",
+    "sample_count": 100,
+    "top1_accuracy": 0.42,
+    "ece_10bin": 0.02617537915706638,
+    "mce_10bin": 0.10289419889450074,
+    "mean_confidence": 0.40501769959926603,
+    "mean_entropy_nats": 0.9767221742868424,
+    "std_entropy_nats": 0.3177185868091868,
+    "latency_mean_ms": 462.55050456005404,
+    "latency_p50_ms": 443.3920165001837,
+    "latency_p95_ms": 624.0449915998397,
+    "throughput_fps": 2.1619260818905186,
+    "calibration_bins": [
+      {
+        "bin_index": 1,
+        "range": "[0.0, 0.1]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.05,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 2,
+        "range": "[0.1, 0.2]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.15000000000000002,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 3,
+        "range": "[0.2, 0.3]",
+        "count": 28,
+        "accuracy": 0.25,
+        "confidence": 0.2538272717169353,
+        "gap": 0.00382727171693531
+      },
+      {
+        "bin_index": 4,
+        "range": "[0.3, 0.4]",
+        "count": 20,
+        "accuracy": 0.45,
+        "confidence": 0.34710580110549927,
+        "gap": 0.10289419889450074
+      },
+      {
+        "bin_index": 5,
+        "range": "[0.4, 0.5]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.45,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 6,
+        "range": "[0.5, 0.6]",
+        "count": 52,
+        "accuracy": 0.5,
+        "confidence": 0.5087017371104314,
+        "gap": 0.008701737110431429
+      },
+      {
+        "bin_index": 7,
+        "range": "[0.6, 0.7]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.6500000000000001,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 8,
+        "range": "[0.7, 0.8]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.75,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 9,
+        "range": "[0.8, 0.9]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.8500000000000001,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 10,
+        "range": "[0.9, 1.0]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.95,
+        "gap": 0.0
+      }
+    ],
+    "category_breakdown": {
+      "natural science": {
+        "count": 71,
+        "accuracy": 0.4647887323943662,
+        "mean_confidence": 0.44727993137399913,
+        "mean_entropy": 0.856855012161631
+      },
+      "social science": {
+        "count": 26,
+        "accuracy": 0.3076923076923077,
+        "mean_confidence": 0.2778475983784749,
+        "mean_entropy": 1.3367866140145521
+      },
+      "language science": {
+        "count": 3,
+        "accuracy": 0.3333333333333333,
+        "mean_confidence": 0.5069524248441061,
+        "mean_entropy": 0.6930198669433594
+      }
+    }
+  },
+  "seedbench": {
+    "dataset_name": "SEED-Bench-2 (Visual & Temporal)",
+    "sample_count": 100,
+    "top1_accuracy": 0.19,
+    "ece_10bin": 0.07128914803266523,
+    "mce_10bin": 0.07128914803266523,
+    "mean_confidence": 0.26128914803266523,
+    "mean_entropy_nats": 1.3856353950500488,
+    "std_entropy_nats": 0.000542762599381586,
+    "latency_mean_ms": 524.9885346799783,
+    "latency_p50_ms": 495.276892999982,
+    "latency_p95_ms": 720.9400702503672,
+    "throughput_fps": 1.9048035032033193,
+    "calibration_bins": [
+      {
+        "bin_index": 1,
+        "range": "[0.0, 0.1]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.05,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 2,
+        "range": "[0.1, 0.2]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.15000000000000002,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 3,
+        "range": "[0.2, 0.3]",
+        "count": 100,
+        "accuracy": 0.19,
+        "confidence": 0.26128914803266523,
+        "gap": 0.07128914803266523
+      },
+      {
+        "bin_index": 4,
+        "range": "[0.3, 0.4]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.35000000000000003,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 5,
+        "range": "[0.4, 0.5]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.45,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 6,
+        "range": "[0.5, 0.6]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.55,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 7,
+        "range": "[0.6, 0.7]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.6500000000000001,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 8,
+        "range": "[0.7, 0.8]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.75,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 9,
+        "range": "[0.8, 0.9]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.8500000000000001,
+        "gap": 0.0
+      },
+      {
+        "bin_index": 10,
+        "range": "[0.9, 1.0]",
+        "count": 0,
+        "accuracy": 0.0,
+        "confidence": 0.95,
+        "gap": 0.0
+      }
+    ],
+    "category_breakdown": {
+      "General": {
+        "count": 100,
+        "accuracy": 0.19,
+        "mean_confidence": 0.26128914803266523,
+        "mean_entropy": 1.3856353950500488
+      }
+    }
+  }
+}
